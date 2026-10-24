@@ -5,12 +5,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Unzip and locate project
+        id: p
+        run: |
+          rm -rf _src; mkdir _src
+          z=$(find . -name '*.zip' -not -path './.git/*' | head -1)
+          if [ -n "$z" ]; then echo "using $z"; unzip -q -o "$z" -d _src; root=_src; else root=.; fi
+          f=$(find "$root" -name settings.gradle -not -path './.git/*' | head -1)
+          [ -n "$f" ] || { echo "settings.gradle not found"; find "$root" -not -path './.git/*' | head -60; exit 1; }
+          echo "dir=$(dirname "$f")" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: 17 }
       - uses: gradle/actions/setup-gradle@v4
         with: { gradle-version: 8.7 }
       - run: gradle assembleDebug --no-daemon
+        working-directory: ${{ steps.p.outputs.dir }}
       - uses: actions/upload-artifact@v4
         with:
           name: apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: ${{ steps.p.outputs.dir }}/app/build/outputs/apk/debug/app-debug.apk
