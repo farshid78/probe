@@ -1,36 +1,121 @@
-name: build
+
+name: Bastehyab Android Build
+
 on:
   push:
     branches: ['**']
   workflow_dispatch:
+
 permissions:
   contents: write
+
+concurrency:
+  group: bastehyab-build-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   apk:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
-      - name: Unzip and locate project
-        id: p
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Locate Android project
+        id: project
+        shell: bash
         run: |
-          rm -rf _src; mkdir _src
-          z=$(find . -name '*.zip' -not -path './.git/*' | head -1)
-          if [ -n "$z" ]; then echo "using $z"; unzip -q -o "$z" -d _src; root=_src; else root=.; fi
-          f=$(find "$root" -name settings.gradle -not -path './.git/*' | head -1)
-          [ -n "$f" ] || { echo "settings.gradle not found"; find "$root" -not -path './.git/*' | head -60; exit 1; }
-          echo "dir=$(dirname "$f")" >> "$GITHUB_OUTPUT"
-      - uses: actions/setup-java@v4
-        with: { distribution: temurin, java-version: 17 }
-      - uses: gradle/actions/setup-gradle@v4
-        with: { gradle-version: 8.7 }
-      - run: gradle assembleDebug --no-daemon
-        working-directory: ${{ steps.p.outputs.dir }}
-      - uses: actions/upload-artifact@v4
+          set -euo pipefail
+
+          ROOT="."
+
+          find_settings() {
+            find "$1" -type f \
+              \( -name settings.gradle -o -name settings.gradle.kts \) \
+              -not -path '*/.git/*' -print -quit
+          }
+
+          SETTINGS=$(find_settings "$ROOT" || true)
+
+          if [ -z "$SETTINGS" ]; then
+            mkdir -p _src
+
+            mapfile -t ZIPS < <(
+              find . -maxdepth 3 -type f -name '*.zip' \
+                -not -path './.git/*' | sort
+            )
+
+            if [ "${#ZIPS[@]}" -ne 1 ]; then
+              echo "Expected exactly one project ZIP; found ${#ZIPS[@]}."
+              printf '%s\n' "${ZIPS[@]}"
+              exit 1
+            fi
+
+            echo "Extracting: ${ZIPS[0]}"
+            unzip -q -o "${ZIPS[0]}" -d _src
+
+            SETTINGS=$(find_settings _src || true)
+          fi
+
+          if [ -z "$SETTINGS" ]; then
+            echo "Android Gradle project not found."
+            exit 1
+          fi
+
+          PROJECT_DIR=$(dirname "$SETTINGS")
+          PROJECT_DIR=$(realpath "$PROJECT_DIR")
+
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Project directory: $PROJECT_DIR"
+
+      - name: Build Debug APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -f gradlew ]; then
+            chmod +x gradlew
+            ./gradlew assembleDebug --no-daemon
+          else
+            gradle assembleDebug --no-daemon
+          fi
+
+          APK=$(find app/build/outputs/apk/debug \
+            -maxdepth 1 -type f -name '*.apk' -print -quit)
+
+          if [ -z "$APK" ]; then
+            echo "APK was not generated."
+            exit 1
+          fi
+
+          echo "APK_PATH=$(realpath "$APK")" >> "$GITHUB_ENV"
+
+        working-directory: ${{ env.PROJECT_DIR }}
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
         with:
-          name: apk
-          path: ${{ steps.p.outputs.dir }}/app/build/outputs/apk/debug/app-debug.apk
-      - uses: softprops/action-gh-release@v2
+          name: bastehyab-debug-apk
+          path: ${{ env.APK_PATH }}
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Create GitHub Release
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
         with:
-          tag_name: build-${{ github.run_number }}
-          name: Build ${{ github.run_number }}
-          files: ${{ steps.p.outputs.dir }}/app/build/outputs/apk/debug/app-debug.apk
+          tag_name: bastehyab-build-${{ github.run_number }}
+          name: Bastehyab Build ${{ github.run_number }}
+          files: ${{ env.APK_PATH }}
+          generate_release_notes: true
