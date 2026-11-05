@@ -1,22 +1,77 @@
-# 4) پیدا کردن پروژه
-      - name: Locate Android project
-        id: project
+name: Bastehyab Android Build and Release
+
+on:
+  push:
+    branches:
+      - '**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: bastehyab-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    name: Test, Build and Sign APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Install project Android SDK packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager --install \
+            "platform-tools" \
+            "platforms;android-34" \
+            "build-tools;34.0.0"
+
+      # مرحله تشخیصی - فقط برای دیدن محتوای ZIP
+      - name: Debug - Inspect ZIP contents
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "=== Listing all ZIP files ==="
-          find . -maxdepth 3 -type f -name '*.zip' -not -path './.git/*' | sort
+          echo "=== Current directory ==="
+          pwd
+          ls -la
 
           echo ""
-          echo "=== Searching for settings.gradle inside ZIP ==="
+          echo "=== All ZIP files found ==="
+          find . -maxdepth 3 -type f -name '*.zip' -not -path './.git/*' | sort || true
+
+          echo ""
+          echo "=== Searching inside each ZIP ==="
           for z in $(find . -maxdepth 3 -type f -name '*.zip' -not -path './.git/*'); do
-            echo "----- ZIP: $z -----"
-            unzip -l "$z" | grep -i settings || echo "(no settings* file found)"
             echo ""
-            unzip -l "$z" | grep -i "\.gradle" || echo "(no .gradle files found)"
+            echo "========================================"
+            echo "ZIP file: $z"
+            echo "========================================"
+            echo "--- Files containing 'settings' ---"
+            unzip -l "$z" 2>/dev/null | grep -i settings || echo "(no settings* found)"
             echo ""
+            echo "--- Files containing '.gradle' ---"
+            unzip -l "$z" 2>/dev/null | grep -i "\.gradle" || echo "(no .gradle files found)"
+            echo ""
+            echo "--- First 60 files in ZIP ---"
+            unzip -l "$z" 2>/dev/null | head -60 || echo "(could not list)"
           done
 
-          echo "=== Done ==="
-          exit 1   # عمداً خطا می‌دهیم تا فقط لاگ را ببینیم
+          echo ""
+          echo "=== End of debug ==="
+          exit 1
