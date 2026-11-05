@@ -1,4 +1,3 @@
-
 name: Bastehyab Android Build
 
 on:
@@ -16,6 +15,7 @@ concurrency:
 jobs:
   apk:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     steps:
       - name: Checkout source
@@ -38,33 +38,26 @@ jobs:
         run: |
           set -euo pipefail
 
-          ROOT="."
-
           find_settings() {
             find "$1" -type f \
               \( -name settings.gradle -o -name settings.gradle.kts \) \
-              -not -path '*/.git/*' -print -quit
+              -not -path '*/.git/*' -not -path '*/build/*' | sort | head -n 1
           }
 
-          SETTINGS=$(find_settings "$ROOT" || true)
+          SETTINGS=$(find_settings . || true)
 
           if [ -z "$SETTINGS" ]; then
             mkdir -p _src
-
             mapfile -t ZIPS < <(
-              find . -maxdepth 3 -type f -name '*.zip' \
-                -not -path './.git/*' | sort
+              find . -maxdepth 3 -type f -name '*.zip' -not -path './.git/*' | sort
             )
-
             if [ "${#ZIPS[@]}" -ne 1 ]; then
               echo "Expected exactly one project ZIP; found ${#ZIPS[@]}."
               printf '%s\n' "${ZIPS[@]}"
               exit 1
             fi
-
             echo "Extracting: ${ZIPS[0]}"
             unzip -q -o "${ZIPS[0]}" -d _src
-
             SETTINGS=$(find_settings _src || true)
           fi
 
@@ -73,35 +66,36 @@ jobs:
             exit 1
           fi
 
-          PROJECT_DIR=$(dirname "$SETTINGS")
-          PROJECT_DIR=$(realpath "$PROJECT_DIR")
-
+          PROJECT_DIR=$(realpath "$(dirname "$SETTINGS")")
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
           echo "Project directory: $PROJECT_DIR"
 
-      - name: Build Debug APK
+      - name: Run parser and core smoke tests
         shell: bash
+        working-directory: ${{ env.PROJECT_DIR }}
         run: |
           set -euo pipefail
+          bash tools/parser-smoke-tests/run.sh
+          bash tools/android-core-smoke-tests/run.sh
 
+      - name: Build Debug APK
+        shell: bash
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          set -euo pipefail
           if [ -f gradlew ]; then
             chmod +x gradlew
-            ./gradlew assembleDebug --no-daemon
+            ./gradlew assembleDebug --no-daemon --stacktrace
           else
-            gradle assembleDebug --no-daemon
+            gradle assembleDebug --no-daemon --stacktrace
           fi
 
-          APK=$(find app/build/outputs/apk/debug \
-            -maxdepth 1 -type f -name '*.apk' -print -quit)
-
+          APK=$(find app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' -print -quit)
           if [ -z "$APK" ]; then
             echo "APK was not generated."
             exit 1
           fi
-
           echo "APK_PATH=$(realpath "$APK")" >> "$GITHUB_ENV"
-
-        working-directory: ${{ env.PROJECT_DIR }}
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
@@ -111,11 +105,14 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Create GitHub Release
+      - name: Create GitHub Pre-release
         if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: bastehyab-build-${{ github.run_number }}
-          name: Bastehyab Build ${{ github.run_number }}
+          name: Bastehyab Debug Build ${{ github.run_number }}
+          body: |
+            Debug build for testing only (signed with the default debug key). Not for Google Play or Cafe Bazaar.
+          prerelease: true
           files: ${{ env.APK_PATH }}
           generate_release_notes: true
