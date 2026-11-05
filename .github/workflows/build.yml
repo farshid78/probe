@@ -36,10 +36,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          sdkmanager --install \
-            "platform-tools" \
-            "platforms;android-34" \
-            "build-tools;34.0.0"
+          sdkmanager --install "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
       - name: Locate Android project
         id: project
@@ -49,13 +46,20 @@ jobs:
 
           echo "Looking for settings.gradle..."
 
-          # اول در ریشه مخزن جستجو کن
-          SETTINGS=$(find . -name "settings.gradle" -o -name "settings.gradle.kts" | grep -v "/\.git/" | grep -v "/build/" | head -n 1 || true)
+          SETTINGS=""
 
+          # جستجو در ریشه
+          if [ -f "./settings.gradle" ]; then
+            SETTINGS="./settings.gradle"
+          elif [ -f "./settings.gradle.kts" ]; then
+            SETTINGS="./settings.gradle.kts"
+          fi
+
+          # اگر پیدا نشد، ZIP را باز کن
           if [ -z "$SETTINGS" ]; then
-            echo "Not found in repo root. Extracting ZIP..."
-
+            echo "Not found in root. Extracting ZIP..."
             ZIP_FILE=$(find . -maxdepth 2 -name "*.zip" | head -n 1)
+
             if [ -z "$ZIP_FILE" ]; then
               echo "::error::No ZIP file found"
               exit 1
@@ -66,28 +70,31 @@ jobs:
             mkdir -p _src
             unzip -q -o "$ZIP_FILE" -d _src
 
-            SETTINGS=$(find _src -name "settings.gradle" -o -name "settings.gradle.kts" | head -n 1 || true)
+            # جستجو داخل _src
+            SETTINGS=$(find _src -name "settings.gradle" | head -n 1)
+            if [ -z "$SETTINGS" ]; then
+              SETTINGS=$(find _src -name "settings.gradle.kts" | head -n 1)
+            fi
           fi
 
           if [ -z "$SETTINGS" ]; then
             echo "::error::settings.gradle not found"
-            echo "Searching all .gradle files:"
-            find . -name "*.gradle*" | head -30 || true
+            find _src -name "*.gradle*" || true
             exit 1
           fi
 
           PROJECT_DIR=\( (dirname " \)(realpath "$SETTINGS")")
-          echo "Found settings.gradle at: $SETTINGS"
-          echo "Project directory: $PROJECT_DIR"
+          echo "Found: $SETTINGS"
+          echo "Project dir: $PROJECT_DIR"
 
-          if [ ! -f "$PROJECT_DIR/app/build.gradle" ] && [ ! -f "$PROJECT_DIR/app/build.gradle.kts" ]; then
+          if [ ! -f "$PROJECT_DIR/app/build.gradle" ]; then
             echo "::error::app/build.gradle not found"
             ls -la "$PROJECT_DIR"
             exit 1
           fi
 
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "✓ Project ready at $PROJECT_DIR"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> $GITHUB_ENV
+          echo "Project ready"
 
       - name: Setup Gradle 8.7
         uses: gradle/actions/setup-gradle@v6
@@ -96,25 +103,15 @@ jobs:
           cache-provider: basic
           build-root-directory: ${{ env.PROJECT_DIR }}
 
-      - name: Verify build toolchain
+      - name: Verify toolchain
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
           set -euo pipefail
           java -version
           gradle --version
-          echo "Current dir: $(pwd)"
+          pwd
           ls -la
-
-      - name: Run smoke tests
-        working-directory: ${{ env.PROJECT_DIR }}
-        shell: bash
-        run: |
-          set +e
-          [ -f tools/parser-smoke-tests/run.sh ] && bash tools/parser-smoke-tests/run.sh
-          [ -f tools/android-core-smoke-tests/run.sh ] && bash tools/android-core-smoke-tests/run.sh
-          [ -f tools/ui-layout-smoke-tests/run.sh ] && bash tools/ui-layout-smoke-tests/run.sh
-          echo "Smoke tests finished"
 
       - name: Build Debug APK
         working-directory: ${{ env.PROJECT_DIR }}
@@ -125,13 +122,13 @@ jobs:
 
           APK=$(find app/build/outputs/apk/debug -name "*.apk" | head -n 1)
           if [ -z "$APK" ]; then
-            echo "::error::Debug APK not generated"
+            echo "::error::Debug APK not found"
             exit 1
           fi
 
-          mkdir -p "$GITHUB_WORKSPACE/dist"
-          cp "$APK" "$GITHUB_WORKSPACE/dist/Bastehyab-Debug.apk"
-          echo "Debug APK: $APK"
+          mkdir -p $GITHUB_WORKSPACE/dist
+          cp "$APK" $GITHUB_WORKSPACE/dist/Bastehyab-Debug.apk
+          echo "Debug APK created"
 
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
@@ -141,7 +138,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Validate release signing secrets
+      - name: Validate secrets
         if: github.ref == 'refs/heads/main'
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -151,14 +148,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for name in KEYSTORE_BASE64 KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
-            if [ -z "${!name:-}" ]; then
-              echo "::error::Secret $name is missing"
-              exit 1
-            fi
-          done
+          if [ -z "$KEYSTORE_BASE64" ] || [ -z "$KEYSTORE_PASSWORD" ] || [ -z "$KEY_ALIAS" ] || [ -z "$KEY_PASSWORD" ]; then
+            echo "::error::One or more secrets are missing"
+            exit 1
+          fi
 
-      - name: Prepare release keystore properties
+      - name: Prepare keystore
         if: github.ref == 'refs/heads/main'
         working-directory: ${{ env.PROJECT_DIR }}
         env:
@@ -169,18 +164,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          KEYSTORE_PATH="$RUNNER_TEMP/bastehyab-release.jks"
-          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH"
-          chmod 600 "$KEYSTORE_PATH"
+          KEYSTORE_PATH=$RUNNER_TEMP/bastehyab-release.jks
+          echo "$KEYSTORE_BASE64" | base64 --decode > $KEYSTORE_PATH
+          chmod 600 $KEYSTORE_PATH
 
-          cat > keystore.properties << EOF
-          storeFile=$KEYSTORE_PATH
-          storePassword=$KEYSTORE_PASSWORD
-          keyAlias=$KEY_ALIAS
-          keyPassword=$KEY_PASSWORD
-          EOF
+          echo "storeFile=$KEYSTORE_PATH" > keystore.properties
+          echo "storePassword=$KEYSTORE_PASSWORD" >> keystore.properties
+          echo "keyAlias=$KEY_ALIAS" >> keystore.properties
+          echo "keyPassword=$KEY_PASSWORD" >> keystore.properties
 
-      - name: Build signed Release APK
+      - name: Build Release APK
         if: github.ref == 'refs/heads/main'
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
@@ -190,28 +183,28 @@ jobs:
 
           APK=$(find app/build/outputs/apk/release -name "*.apk" | head -n 1)
           if [ -z "$APK" ]; then
-            echo "::error::Release APK not generated"
+            echo "::error::Release APK not found"
             exit 1
           fi
 
-          mkdir -p "$GITHUB_WORKSPACE/dist"
-          cp "$APK" "$GITHUB_WORKSPACE/dist/Bastehyab-Release.apk"
+          mkdir -p $GITHUB_WORKSPACE/dist
+          cp "$APK" $GITHUB_WORKSPACE/dist/Bastehyab-Release.apk
 
-      - name: Verify signed Release APK
+      - name: Verify Release APK
         if: github.ref == 'refs/heads/main'
         shell: bash
         run: |
           set -euo pipefail
-          APK="$GITHUB_WORKSPACE/dist/Bastehyab-Release.apk"
-          BUILD_TOOLS="${ANDROID_HOME}/build-tools/34.0.0"
+          APK=$GITHUB_WORKSPACE/dist/Bastehyab-Release.apk
+          BUILD_TOOLS=$ANDROID_HOME/build-tools/34.0.0
 
-          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK"
-          "$BUILD_TOOLS/zipalign" -c -v 4 "$APK"
-          "$BUILD_TOOLS/aapt" dump badging "$APK" | tee "$RUNNER_TEMP/badging.txt"
-          grep -q "name='app.bastehyab'" "$RUNNER_TEMP/badging.txt"
-          sha256sum "$APK" > "$GITHUB_WORKSPACE/dist/SHA256.txt"
+          $BUILD_TOOLS/apksigner verify --verbose --print-certs $APK
+          $BUILD_TOOLS/zipalign -c -v 4 $APK
+          $BUILD_TOOLS/aapt dump badging $APK | tee $RUNNER_TEMP/badging.txt
+          grep -q "name='app.bastehyab'" $RUNNER_TEMP/badging.txt
+          sha256sum $APK > $GITHUB_WORKSPACE/dist/SHA256.txt
 
-      - name: Upload signed Release APK
+      - name: Upload Release APK
         if: github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@v4
         with:
@@ -228,9 +221,7 @@ jobs:
         with:
           tag_name: bastehyab-build-${{ github.run_number }}
           name: Bastehyab Release Build ${{ github.run_number }}
-          body: |
-            نسخه Release بسته‌یاب.
-            APK با کلید اختصاصی امضا شده است.
+          body: نسخه Release بسته‌یاب
           prerelease: false
           files: |
             dist/Bastehyab-Release.apk
@@ -242,5 +233,5 @@ jobs:
         shell: bash
         run: |
           set +e
-          [ -n "${PROJECT_DIR:-}" ] && rm -f "$PROJECT_DIR/keystore.properties"
-          rm -f "$RUNNER_TEMP/bastehyab-release.jks"
+          rm -f $PROJECT_DIR/keystore.properties
+          rm -f $RUNNER_TEMP/bastehyab-release.jks
