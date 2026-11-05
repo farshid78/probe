@@ -20,18 +20,18 @@ jobs:
     timeout-minutes: 45
 
     steps:
-      # 1) دریافت سورس مخزن خصوصی
+      # 1) دریافت سورس مخزن
       - name: Checkout source
         uses: actions/checkout@v7
 
-      # 2) نصب Java مطابق Android Gradle Plugin 8.5.2
+      # 2) نصب Java 17
       - name: Setup Java 17
         uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '17'
 
-      # 3) نصب Android SDK بدون نیاز به Android Studio
+      # 3) نصب Android SDK
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
 
@@ -44,7 +44,7 @@ jobs:
             "platforms;android-34" \
             "build-tools;34.0.0"
 
-      # 4) پیدا کردن پروژه؛ پوشه سورس اولویت دارد، ZIP فقط در نبود پوشه استفاده می‌شود
+      # 4) پیدا کردن پروژه
       - name: Locate Android project
         id: project
         shell: bash
@@ -77,10 +77,9 @@ jobs:
               echo ""
               echo "Inspecting ZIP: $z"
               echo "----------------------------------------"
-              unzip -l "$z" 2>/dev/null | head -40 || echo "(could not list ZIP contents)"
+              unzip -l "$z" 2>/dev/null | head -50 || echo "(could not list ZIP contents)"
               echo "----------------------------------------"
 
-              # بررسی وجود settings.gradle یا settings.gradle.kts
               if unzip -l "\( z" 2>/dev/null | grep -qE '(^|/)(settings\.gradle(\.kts)?) \)'; then
                 echo "✓ Found settings.gradle inside $z"
                 CANDIDATES+=("$z")
@@ -116,7 +115,7 @@ jobs:
           fi
 
           PROJECT_DIR="\( (realpath " \)(dirname "$SETTINGS")")"
-          
+
           if [ ! -f "$PROJECT_DIR/app/build.gradle" ] && [ ! -f "$PROJECT_DIR/app/build.gradle.kts" ]; then
             echo "::error::The detected project does not contain app/build.gradle(.kts)."
             echo "PROJECT_DIR = $PROJECT_DIR"
@@ -127,7 +126,7 @@ jobs:
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
           echo "Android project found at: $PROJECT_DIR"
 
-      # 5) نصب دقیق Gradle 8.7 (بعد از پیدا شدن پروژه)
+      # 5) نصب Gradle 8.7
       - name: Setup Gradle 8.7
         uses: gradle/actions/setup-gradle@v6
         with:
@@ -135,7 +134,7 @@ jobs:
           cache-provider: basic
           build-root-directory: ${{ env.PROJECT_DIR }}
 
-      # 6) کنترل نسخه ابزارها و تنظیمات پروژه
+      # 6) کنترل نسخه ابزارها
       - name: Verify build toolchain
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
@@ -148,7 +147,7 @@ jobs:
           grep -q "applicationId 'app.bastehyab'" app/build.gradle
           echo "Project toolchain matches: JDK 17 / Gradle 8.7 / AGP 8.5.2 / SDK 34."
 
-      # 7) تست‌های پارسر، موتور اصلی و چیدمان RTL
+      # 7) تست‌ها
       - name: Run parser, core and UI layout smoke tests
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
@@ -158,7 +157,7 @@ jobs:
           bash tools/android-core-smoke-tests/run.sh
           bash tools/ui-layout-smoke-tests/run.sh
 
-      # 8) ساخت APK آزمایشی روی همه شاخه‌ها
+      # 8) ساخت Debug APK
       - name: Build Debug APK
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
@@ -183,8 +182,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      # 9) فقط روی main نسخه Release امضاشده ساخته می‌شود.
-      # چهار مقدار زیر باید در Settings > Secrets and variables > Actions تعریف شده باشند.
+      # 9) بررسی Secrets برای Release
       - name: Validate release signing secrets
         if: github.ref == 'refs/heads/main'
         env:
@@ -202,7 +200,7 @@ jobs:
             fi
           done
 
-      # 10) ساخت فایل keystore موقت و keystore.properties موردنیاز همین سورس
+      # 10) آماده‌سازی keystore
       - name: Prepare release keystore properties
         if: github.ref == 'refs/heads/main'
         working-directory: ${{ env.PROJECT_DIR }}
@@ -221,7 +219,6 @@ jobs:
           test -s "$KEYSTORE_PATH"
           chmod 600 "$KEYSTORE_PATH"
 
-          # فایل با قواعد Java Properties نوشته می‌شود تا کاراکترهای ویژه رمز خراب نشوند.
           python3 - <<'PY'
           import os
           from pathlib import Path
@@ -264,7 +261,7 @@ jobs:
           Path("keystore.properties").write_bytes(content.encode("ascii"))
           PY
 
-      # 11) Gradle خود پروژه Release را با همین کلید امضا می‌کند
+      # 11) ساخت Release امضاشده
       - name: Build signed Release APK
         if: github.ref == 'refs/heads/main'
         working-directory: ${{ env.PROJECT_DIR }}
@@ -283,7 +280,7 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/dist"
           cp "$APK" "$GITHUB_WORKSPACE/dist/Bastehyab-Release.apk"
 
-      # 12) کنترل امضا، تراز APK، شناسه برنامه و نسخه
+      # 12) بررسی امضا و صحت APK
       - name: Verify signed Release APK
         if: github.ref == 'refs/heads/main'
         shell: bash
@@ -316,7 +313,7 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      # 13) انتشار خودکار در GitHub Releases؛ فایل Release امضاشده است، نه Debug
+      # 13) انتشار در GitHub Releases
       - name: Create GitHub Release
         if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
@@ -334,7 +331,7 @@ jobs:
             dist/SHA256.txt
           generate_release_notes: true
 
-      # 14) پاک‌کردن کلید موقت و فایل رمزها حتی در صورت شکست Build
+      # 14) پاک کردن فایل‌های موقت
       - name: Remove temporary signing files
         if: always()
         shell: bash
