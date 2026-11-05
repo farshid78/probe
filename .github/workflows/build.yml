@@ -44,14 +44,7 @@ jobs:
             "platforms;android-34" \
             "build-tools;34.0.0"
 
-      # 4) نصب دقیق Gradle 8.7؛ پروژه فعلی Gradle Wrapper ندارد
-      - name: Setup Gradle 8.7
-        uses: gradle/actions/setup-gradle@v6
-        with:
-          gradle-version: '8.7'
-          cache-provider: basic
-
-      # 5) پیدا کردن پروژه؛ پوشه سورس اولویت دارد، ZIP فقط در نبود پوشه استفاده می‌شود
+      # 4) پیدا کردن پروژه؛ پوشه سورس اولویت دارد، ZIP فقط در نبود پوشه استفاده می‌شود
       - name: Locate Android project
         id: project
         shell: bash
@@ -76,7 +69,7 @@ jobs:
 
             CANDIDATES=()
             for z in "${ZIPS[@]}"; do
-              if unzip -Z1 "$z" | grep -qE '(^|/)settings\.gradle(\.kts)?$'; then
+              if unzip -Z1 "\( z" | grep -qE '(^|/)settings\.gradle(\.kts)? \)'; then
                 CANDIDATES+=("$z")
               else
                 echo "Ignoring ZIP without a Gradle project: $z"
@@ -100,7 +93,7 @@ jobs:
             exit 1
           fi
 
-          PROJECT_DIR="$(realpath "$(dirname "$SETTINGS")")"
+          PROJECT_DIR="\( (realpath " \)(dirname "$SETTINGS")")"
           if [ ! -f "$PROJECT_DIR/app/build.gradle" ] && [ ! -f "$PROJECT_DIR/app/build.gradle.kts" ]; then
             echo "::error::The detected project does not contain app/build.gradle(.kts)."
             exit 1
@@ -108,6 +101,14 @@ jobs:
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
           echo "Android project: $PROJECT_DIR"
+
+      # 5) نصب دقیق Gradle 8.7 (بعد از پیدا شدن پروژه)
+      - name: Setup Gradle 8.7
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: '8.7'
+          cache-provider: basic
+          build-root-directory: ${{ env.PROJECT_DIR }}
 
       # 6) کنترل نسخه ابزارها و تنظیمات پروژه
       - name: Verify build toolchain
@@ -265,7 +266,7 @@ jobs:
           set -euo pipefail
 
           APK="$GITHUB_WORKSPACE/dist/Bastehyab-Release.apk"
-          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          SDK_ROOT="\( {ANDROID_HOME:- \){ANDROID_SDK_ROOT:-}}"
           if [ -z "$SDK_ROOT" ]; then
             echo "::error::Android SDK path is not configured."
             exit 1
