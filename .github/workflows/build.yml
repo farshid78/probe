@@ -63,25 +63,45 @@ jobs:
           SETTINGS="$(find_settings .)"
 
           if [ -z "$SETTINGS" ]; then
+            echo "No settings.gradle found in repository root. Looking for ZIP files..."
+
             mapfile -t ZIPS < <(
               find . -maxdepth 3 -type f -name '*.zip' -not -path './.git/*' | sort
             )
 
+            echo "Found ZIP files:"
+            printf '  - %s\n' "${ZIPS[@]:-<none>}"
+
             CANDIDATES=()
             for z in "${ZIPS[@]}"; do
-              if unzip -Z1 "\( z" | grep -qE '(^|/)settings\.gradle(\.kts)? \)'; then
+              echo ""
+              echo "Inspecting ZIP: $z"
+              echo "----------------------------------------"
+              unzip -l "$z" 2>/dev/null | head -40 || echo "(could not list ZIP contents)"
+              echo "----------------------------------------"
+
+              # بررسی وجود settings.gradle یا settings.gradle.kts
+              if unzip -l "\( z" 2>/dev/null | grep -qE '(^|/)(settings\.gradle(\.kts)?) \)'; then
+                echo "✓ Found settings.gradle inside $z"
                 CANDIDATES+=("$z")
               else
-                echo "Ignoring ZIP without a Gradle project: $z"
+                echo "✗ No settings.gradle found inside $z"
               fi
             done
 
-            if [ "${#CANDIDATES[@]}" -ne 1 ]; then
-              echo "::error::Expected exactly one ZIP containing settings.gradle; found ${#CANDIDATES[@]}."
-              printf 'ZIP files found: %s\n' "${ZIPS[@]:-<none>}"
+            if [ "${#CANDIDATES[@]}" -eq 0 ]; then
+              echo "::error::No ZIP containing settings.gradle was found."
+              echo "Please make sure the ZIP has a valid Android project structure."
               exit 1
             fi
 
+            if [ "${#CANDIDATES[@]}" -gt 1 ]; then
+              echo "::error::Found more than one valid ZIP. Expected exactly one."
+              printf 'Valid ZIPs: %s\n' "${CANDIDATES[@]}"
+              exit 1
+            fi
+
+            echo "Using ZIP: ${CANDIDATES[0]}"
             rm -rf _src
             mkdir -p _src
             unzip -q -o "${CANDIDATES[0]}" -d _src
@@ -89,18 +109,23 @@ jobs:
           fi
 
           if [ -z "$SETTINGS" ]; then
-            echo "::error::Android Gradle project not found."
+            echo "::error::Android Gradle project not found after extraction."
+            echo "Contents of _src:"
+            find _src -maxdepth 4 -type f | head -50 || true
             exit 1
           fi
 
           PROJECT_DIR="\( (realpath " \)(dirname "$SETTINGS")")"
+          
           if [ ! -f "$PROJECT_DIR/app/build.gradle" ] && [ ! -f "$PROJECT_DIR/app/build.gradle.kts" ]; then
             echo "::error::The detected project does not contain app/build.gradle(.kts)."
+            echo "PROJECT_DIR = $PROJECT_DIR"
+            ls -la "$PROJECT_DIR" || true
             exit 1
           fi
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Android project: $PROJECT_DIR"
+          echo "Android project found at: $PROJECT_DIR"
 
       # 5) نصب دقیق Gradle 8.7 (بعد از پیدا شدن پروژه)
       - name: Setup Gradle 8.7
