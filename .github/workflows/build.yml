@@ -32,69 +32,50 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
 
-      - name: Install project Android SDK packages
-        shell: bash
-        run: |
-          set -euo pipefail
-          sdkmanager --install "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+      - name: Install SDK packages
+        run: sdkmanager --install "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
       - name: Locate Android project
         id: project
-        shell: bash
         run: |
-          set -euo pipefail
-
-          echo "Looking for settings.gradle..."
+          echo "Looking for settings.gradle"
 
           SETTINGS=""
 
-          # جستجو در ریشه
-          if [ -f "./settings.gradle" ]; then
-            SETTINGS="./settings.gradle"
-          elif [ -f "./settings.gradle.kts" ]; then
-            SETTINGS="./settings.gradle.kts"
+          if [ -f settings.gradle ]; then
+            SETTINGS=settings.gradle
           fi
 
-          # اگر پیدا نشد، ZIP را باز کن
           if [ -z "$SETTINGS" ]; then
-            echo "Not found in root. Extracting ZIP..."
-            ZIP_FILE=$(find . -maxdepth 2 -name "*.zip" | head -n 1)
+            echo "Extracting ZIP..."
+            ZIP_FILE=`find . -maxdepth 2 -name "*.zip" | head -n 1`
+            echo "ZIP = $ZIP_FILE"
 
-            if [ -z "$ZIP_FILE" ]; then
-              echo "::error::No ZIP file found"
-              exit 1
-            fi
-
-            echo "Using ZIP: $ZIP_FILE"
             rm -rf _src
-            mkdir -p _src
+            mkdir _src
             unzip -q -o "$ZIP_FILE" -d _src
 
-            # جستجو داخل _src
-            SETTINGS=$(find _src -name "settings.gradle" | head -n 1)
-            if [ -z "$SETTINGS" ]; then
-              SETTINGS=$(find _src -name "settings.gradle.kts" | head -n 1)
-            fi
+            SETTINGS=`find _src -name settings.gradle | head -n 1`
           fi
 
           if [ -z "$SETTINGS" ]; then
-            echo "::error::settings.gradle not found"
-            find _src -name "*.gradle*" || true
+            echo "settings.gradle not found"
+            find _src -name "*.gradle*" 
             exit 1
           fi
 
-          PROJECT_DIR=\( (dirname " \)(realpath "$SETTINGS")")
-          echo "Found: $SETTINGS"
-          echo "Project dir: $PROJECT_DIR"
+          echo "Found settings at $SETTINGS"
+          PROJECT_DIR=`dirname $SETTINGS`
+          echo "Project dir = $PROJECT_DIR"
 
-          if [ ! -f "$PROJECT_DIR/app/build.gradle" ]; then
-            echo "::error::app/build.gradle not found"
-            ls -la "$PROJECT_DIR"
+          if [ ! -f $PROJECT_DIR/app/build.gradle ]; then
+            echo "app/build.gradle missing"
+            ls -la $PROJECT_DIR
             exit 1
           fi
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> $GITHUB_ENV
-          echo "Project ready"
+          echo "Project is ready"
 
       - name: Setup Gradle 8.7
         uses: gradle/actions/setup-gradle@v6
@@ -103,11 +84,9 @@ jobs:
           cache-provider: basic
           build-root-directory: ${{ env.PROJECT_DIR }}
 
-      - name: Verify toolchain
+      - name: Verify
         working-directory: ${{ env.PROJECT_DIR }}
-        shell: bash
         run: |
-          set -euo pipefail
           java -version
           gradle --version
           pwd
@@ -115,20 +94,12 @@ jobs:
 
       - name: Build Debug APK
         working-directory: ${{ env.PROJECT_DIR }}
-        shell: bash
         run: |
-          set -euo pipefail
           gradle --no-daemon --stacktrace assembleDebug
-
-          APK=$(find app/build/outputs/apk/debug -name "*.apk" | head -n 1)
-          if [ -z "$APK" ]; then
-            echo "::error::Debug APK not found"
-            exit 1
-          fi
-
+          APK=`find app/build/outputs/apk/debug -name "*.apk" | head -n 1`
+          echo "APK = $APK"
           mkdir -p $GITHUB_WORKSPACE/dist
           cp "$APK" $GITHUB_WORKSPACE/dist/Bastehyab-Debug.apk
-          echo "Debug APK created"
 
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
@@ -145,13 +116,11 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-        shell: bash
         run: |
-          set -euo pipefail
-          if [ -z "$KEYSTORE_BASE64" ] || [ -z "$KEYSTORE_PASSWORD" ] || [ -z "$KEY_ALIAS" ] || [ -z "$KEY_PASSWORD" ]; then
-            echo "::error::One or more secrets are missing"
-            exit 1
-          fi
+          if [ -z "$KEYSTORE_BASE64" ]; then echo "Missing KEYSTORE_BASE64"; exit 1; fi
+          if [ -z "$KEYSTORE_PASSWORD" ]; then echo "Missing KEYSTORE_PASSWORD"; exit 1; fi
+          if [ -z "$KEY_ALIAS" ]; then echo "Missing KEY_ALIAS"; exit 1; fi
+          if [ -z "$KEY_PASSWORD" ]; then echo "Missing KEY_PASSWORD"; exit 1; fi
 
       - name: Prepare keystore
         if: github.ref == 'refs/heads/main'
@@ -161,13 +130,10 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-        shell: bash
         run: |
-          set -euo pipefail
           KEYSTORE_PATH=$RUNNER_TEMP/bastehyab-release.jks
           echo "$KEYSTORE_BASE64" | base64 --decode > $KEYSTORE_PATH
           chmod 600 $KEYSTORE_PATH
-
           echo "storeFile=$KEYSTORE_PATH" > keystore.properties
           echo "storePassword=$KEYSTORE_PASSWORD" >> keystore.properties
           echo "keyAlias=$KEY_ALIAS" >> keystore.properties
@@ -176,35 +142,24 @@ jobs:
       - name: Build Release APK
         if: github.ref == 'refs/heads/main'
         working-directory: ${{ env.PROJECT_DIR }}
-        shell: bash
         run: |
-          set -euo pipefail
           gradle --no-daemon --stacktrace clean assembleRelease
-
-          APK=$(find app/build/outputs/apk/release -name "*.apk" | head -n 1)
-          if [ -z "$APK" ]; then
-            echo "::error::Release APK not found"
-            exit 1
-          fi
-
+          APK=`find app/build/outputs/apk/release -name "*.apk" | head -n 1`
           mkdir -p $GITHUB_WORKSPACE/dist
           cp "$APK" $GITHUB_WORKSPACE/dist/Bastehyab-Release.apk
 
-      - name: Verify Release APK
+      - name: Verify Release
         if: github.ref == 'refs/heads/main'
-        shell: bash
         run: |
-          set -euo pipefail
           APK=$GITHUB_WORKSPACE/dist/Bastehyab-Release.apk
           BUILD_TOOLS=$ANDROID_HOME/build-tools/34.0.0
-
           $BUILD_TOOLS/apksigner verify --verbose --print-certs $APK
           $BUILD_TOOLS/zipalign -c -v 4 $APK
           $BUILD_TOOLS/aapt dump badging $APK | tee $RUNNER_TEMP/badging.txt
-          grep -q "name='app.bastehyab'" $RUNNER_TEMP/badging.txt
+          grep "name='app.bastehyab'" $RUNNER_TEMP/badging.txt
           sha256sum $APK > $GITHUB_WORKSPACE/dist/SHA256.txt
 
-      - name: Upload Release APK
+      - name: Upload Release
         if: github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@v4
         with:
@@ -215,7 +170,7 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Create GitHub Release
+      - name: Create Release
         if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
@@ -230,8 +185,6 @@ jobs:
 
       - name: Cleanup
         if: always()
-        shell: bash
         run: |
-          set +e
-          rm -f $PROJECT_DIR/keystore.properties
-          rm -f $RUNNER_TEMP/bastehyab-release.jks
+          rm -f $PROJECT_DIR/keystore.properties || true
+          rm -f $RUNNER_TEMP/bastehyab-release.jks || true
