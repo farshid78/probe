@@ -41,37 +41,278 @@ jobs:
             "platforms;android-34" \
             "build-tools;34.0.0"
 
-      # مرحله تشخیصی - فقط برای دیدن محتوای ZIP
-      - name: Debug - Inspect ZIP contents
+      # پیدا کردن پروژه
+      - name: Locate Android project
+        id: project
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "=== Current directory ==="
-          pwd
+          find_settings() {
+            find "$1" -type f \
+              \( -name 'settings.gradle' -o -name 'settings.gradle.kts' \) \
+              -not -path '*/.git/*' \
+              -not -path '*/build/*' \
+              -not -path '*/_src/*' \
+              | sort | head -n 1 || true
+          }
+
+          SETTINGS="$(find_settings .)"
+
+          if [ -z "$SETTINGS" ]; then
+            echo "No settings.gradle in repo root. Looking inside ZIP..."
+
+            mapfile -t ZIPS < <(
+              find . -maxdepth 3 -type f -name '*.zip' -not -path './.git/*' | sort
+            )
+
+            if [ "${#ZIPS[@]}" -eq 0 ]; then
+              echo "::error::No ZIP file found."
+              exit 1
+            fi
+
+            echo "Found ZIP: ${ZIPS[0]}"
+            rm -rf _src
+            mkdir -p _src
+            unzip -q -o "${ZIPS[0]}" -d _src
+
+            SETTINGS="$(find_settings _src)"
+          fi
+
+          if [ -z "$SETTINGS" ]; then
+            echo "::error::settings.gradle not found after extraction."
+            echo "Files under _src:"
+            find _src -name "*.gradle*" | head -20 || true
+            exit 1
+          fi
+
+          PROJECT_DIR="\( (realpath " \)(dirname "$SETTINGS")")"
+
+          if [ ! -f "$PROJECT_DIR/app/build.gradle" ] && [ ! -f "$PROJECT_DIR/app/build.gradle.kts" ]; then
+            echo "::error::app/build.gradle not found in $PROJECT_DIR"
+            ls -la "$PROJECT_DIR" || true
+            exit 1
+          fi
+
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "✓ Android project found at: $PROJECT_DIR"
+
+      - name: Setup Gradle 8.7
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: '8.7'
+          cache-provider: basic
+          build-root-directory: ${{ env.PROJECT_DIR }}
+
+      - name: Verify build toolchain
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          java -version
+          gradle --version
+          echo "Project location: $(pwd)"
           ls -la
+          grep -q "com.android.application" build.gradle || echo "Warning: AGP check"
+          grep -q "compileSdk" app/build.gradle || echo "Warning: compileSdk check"
+          echo "Toolchain OK"
 
-          echo ""
-          echo "=== All ZIP files found ==="
-          find . -maxdepth 3 -type f -name '*.zip' -not -path './.git/*' | sort || true
+      - name: Run smoke tests
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f tools/parser-smoke-tests/run.sh ]; then
+            bash tools/parser-smoke-tests/run.sh
+          else
+            echo "parser-smoke-tests skipped"
+          fi
+          if [ -f tools/android-core-smoke-tests/run.sh ]; then
+            bash tools/android-core-smoke-tests/run.sh
+          else
+            echo "android-core-smoke-tests skipped"
+          fi
+          if [ -f tools/ui-layout-smoke-tests/run.sh ]; then
+            bash tools/ui-layout-smoke-tests/run.sh
+          else
+            echo "ui-layout-smoke-tests skipped"
+          fi
 
-          echo ""
-          echo "=== Searching inside each ZIP ==="
-          for z in $(find . -maxdepth 3 -type f -name '*.zip' -not -path './.git/*'); do
-            echo ""
-            echo "========================================"
-            echo "ZIP file: $z"
-            echo "========================================"
-            echo "--- Files containing 'settings' ---"
-            unzip -l "$z" 2>/dev/null | grep -i settings || echo "(no settings* found)"
-            echo ""
-            echo "--- Files containing '.gradle' ---"
-            unzip -l "$z" 2>/dev/null | grep -i "\.gradle" || echo "(no .gradle files found)"
-            echo ""
-            echo "--- First 60 files in ZIP ---"
-            unzip -l "$z" 2>/dev/null | head -60 || echo "(could not list)"
+      - name: Build Debug APK
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle --no-daemon --stacktrace assembleDebug
+
+          APK="$(find app/build/outputs/apk/debug -type f -name '*.apk' -print -quit)"
+          if [ -z "$APK" ]; then
+            echo "::error::Debug APK was not generated."
+            exit 1
+          fi
+
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          cp "$APK" "$GITHUB_WORKSPACE/dist/Bastehyab-Debug.apk"
+          echo "Debug APK ready: $APK"
+
+      - name: Upload Debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: bastehyab-debug-apk
+          path: dist/Bastehyab-Debug.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Validate release signing secrets
+        if: github.ref == 'refs/heads/main'
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in KEYSTORE_BASE64 KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::GitHub Secret $name is missing."
+              exit 1
+            fi
           done
 
-          echo ""
-          echo "=== End of debug ==="
-          exit 1
+      - name: Prepare release keystore properties
+        if: github.ref == 'refs/heads/main'
+        working-directory: ${{ env.PROJECT_DIR }}
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          KEYSTORE_PATH: ${{ runner.temp }}/bastehyab-release.jks
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          KEYSTORE_PATH="$RUNNER_TEMP/bastehyab-release.jks"
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH"
+          test -s "$KEYSTORE_PATH"
+          chmod 600 "$KEYSTORE_PATH"
+
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          def escape_property(value: str) -> str:
+              out = []
+              for index, char in enumerate(value):
+                  code = ord(char)
+                  if char == "\\":
+                      out.append("\\\\")
+                  elif char == "\t":
+                      out.append("\\t")
+                  elif char == "\n":
+                      out.append("\\n")
+                  elif char == "\r":
+                      out.append("\\r")
+                  elif char == "\f":
+                      out.append("\\f")
+                  elif char in "=:#!" or (index == 0 and char == " "):
+                      out.append("\\" + char)
+                  elif code < 0x20 or code > 0x7E:
+                      if code <= 0xFFFF:
+                          out.append(f"\\u{code:04x}")
+                      else:
+                          value16 = char.encode("utf-16-be")
+                          hi = int.from_bytes(value16[:2], "big")
+                          lo = int.from_bytes(value16[2:], "big")
+                          out.append(f"\\u{hi:04x}\\u{lo:04x}")
+                  else:
+                      out.append(char)
+              return "".join(out)
+
+          values = {
+              "storeFile": os.environ["KEYSTORE_PATH"],
+              "storePassword": os.environ["KEYSTORE_PASSWORD"],
+              "keyAlias": os.environ["KEY_ALIAS"],
+              "keyPassword": os.environ["KEY_PASSWORD"],
+          }
+          content = "\n".join(f"{key}={escape_property(value)}" for key, value in values.items()) + "\n"
+          Path("keystore.properties").write_bytes(content.encode("ascii"))
+          PY
+
+      - name: Build signed Release APK
+        if: github.ref == 'refs/heads/main'
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s keystore.properties
+          gradle --no-daemon --stacktrace clean assembleRelease
+
+          APK="$(find app/build/outputs/apk/release -type f -name '*.apk' -print -quit)"
+          if [ -z "$APK" ]; then
+            echo "::error::Release APK was not generated."
+            exit 1
+          fi
+
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          cp "$APK" "$GITHUB_WORKSPACE/dist/Bastehyab-Release.apk"
+
+      - name: Verify signed Release APK
+        if: github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="$GITHUB_WORKSPACE/dist/Bastehyab-Release.apk"
+          SDK_ROOT="\( {ANDROID_HOME:- \){ANDROID_SDK_ROOT:-}}"
+          if [ -z "$SDK_ROOT" ]; then
+            echo "::error::Android SDK path is not configured."
+            exit 1
+          fi
+          BUILD_TOOLS="$SDK_ROOT/build-tools/34.0.0"
+
+          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK"
+          "$BUILD_TOOLS/zipalign" -c -v 4 "$APK"
+          "$BUILD_TOOLS/aapt" dump badging "$APK" | tee "$RUNNER_TEMP/bastehyab-apk-badging.txt"
+
+          grep -q "name='app.bastehyab'" "$RUNNER_TEMP/bastehyab-apk-badging.txt"
+          sha256sum "$APK" | tee "$GITHUB_WORKSPACE/dist/SHA256.txt"
+
+      - name: Upload signed Release APK
+        if: github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: bastehyab-release-signed-apk
+          path: |
+            dist/Bastehyab-Release.apk
+            dist/SHA256.txt
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Create GitHub Release
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: bastehyab-build-${{ github.run_number }}
+          name: Bastehyab Release Build ${{ github.run_number }}
+          body: |
+            نسخه Release بسته‌یاب.
+
+            APK با کلید اختصاصی انتشار امضا و با apksigner بررسی شده است.
+            فایل Debug صرفاً برای آزمایش است و برای انتشار در کافه‌بازار استفاده نشود.
+          prerelease: false
+          files: |
+            dist/Bastehyab-Release.apk
+            dist/SHA256.txt
+          generate_release_notes: true
+
+      - name: Remove temporary signing files
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          if [ -n "${PROJECT_DIR:-}" ]; then
+            rm -f "$PROJECT_DIR/keystore.properties"
+          fi
+          rm -f "$RUNNER_TEMP/bastehyab-release.jks"
