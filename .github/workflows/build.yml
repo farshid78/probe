@@ -38,31 +38,45 @@ jobs:
         run: |
           set -euo pipefail
 
+          # 1) A project folder already in the repository (preferred).
           find_settings() {
             find "$1" -type f \
               \( -name settings.gradle -o -name settings.gradle.kts \) \
-              -not -path '*/.git/*' -not -path '*/build/*' | sort | head -n 1
+              -not -path '*/.git/*' -not -path '*/build/*' -not -path '*/_src/*' \
+              | sort | head -n 1 || true
           }
 
-          SETTINGS=$(find_settings . || true)
+          SETTINGS=$(find_settings .)
 
+          # 2) Otherwise, a project ZIP that really contains a Gradle project.
           if [ -z "$SETTINGS" ]; then
-            mkdir -p _src
-            mapfile -t ZIPS < <(
-              find . -maxdepth 3 -type f -name '*.zip' -not -path './.git/*' | sort
-            )
-            if [ "${#ZIPS[@]}" -ne 1 ]; then
-              echo "Expected exactly one project ZIP; found ${#ZIPS[@]}."
-              printf '%s\n' "${ZIPS[@]}"
+            mapfile -t ZIPS < <(find . -maxdepth 3 -type f -name '*.zip' -not -path './.git/*' | sort)
+            CANDIDATES=()
+            for z in "${ZIPS[@]}"; do
+              if unzip -Z1 "$z" | grep -qE '(^|/)settings\.gradle(\.kts)?$'; then
+                CANDIDATES+=("$z")
+              else
+                echo "Ignoring ZIP without a Gradle project: $z"
+              fi
+            done
+
+            if [ "${#CANDIDATES[@]}" -ne 1 ]; then
+              echo "Expected exactly one ZIP containing a Gradle project; found ${#CANDIDATES[@]}."
+              echo "ZIP files seen in the repository:"
+              printf '  %s\n' "${ZIPS[@]:-<none>}"
+              echo "Fix: commit the project folder (bastehyab-v1.2-creator-ui/) instead of a ZIP,"
+              echo "or make sure the ZIP contains settings.gradle."
               exit 1
             fi
-            echo "Extracting: ${ZIPS[0]}"
-            unzip -q -o "${ZIPS[0]}" -d _src
-            SETTINGS=$(find_settings _src || true)
+
+            echo "Extracting: ${CANDIDATES[0]}"
+            rm -rf _src && mkdir -p _src
+            unzip -q -o "${CANDIDATES[0]}" -d _src
+            SETTINGS=$(find_settings _src)
           fi
 
           if [ -z "$SETTINGS" ]; then
-            echo "Android Gradle project not found."
+            echo "Android Gradle project not found after extraction."
             exit 1
           fi
 
