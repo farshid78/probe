@@ -1,0 +1,59 @@
+<resources>
+    <string name="app_name">بسته‌یاب</string>
+    <string name="svc_desc">برای شناسایی بسته‌های اینترنت، محتوای قابل مشاهده صفحه‌ی خرید بسته در برنامه‌های اپراتورهای انتخاب‌شده را می‌خواند. پردازش متن روی دستگاه انجام می‌شود؛ خرید یا تغییر خودکار انجام نمی‌شود و بسته‌یاب برای خواندن صفحه از سرویس اینترنتی استفاده نمی‌کند. فیلدهای قابل ویرایش، رمز و اطلاعات حساب خوانده نمی‌شوند. خود برنامه‌ی اپراتور برای بارگیری صفحه‌ها ممکن است طبق روال به اینترنت نیاز داشته باشد.</string>
+
+    <string name="nav_home">خانه</string>
+    <string name="nav_compare">مقایسه</string>
+    <string name="nav_settings">تنظیمات</string>
+
+    <string name="enter_app">ورود به برنامه</string>
+    <string name="skip">رد کردن</string>
+    <string name="app_tagline">مقایسه‌ی هوشمند بسته‌های اینترنت</string>
+    <string name="privacy_line">پردازش روی همین گوشی انجام می‌شود؛ اطلاعات صفحه به سرور ارسال نمی‌شود.</string>
+    <string name="creator">طراحی و توسعه</string>
+    <string name="creator_name">فرشید نبیپور</string>
+    <string name="contact_creator">ارتباط با سازنده</string>
+
+    <string name="access_active">دسترسی فعال</string>
+    <string name="access_inactive">دسترسی غیرفعال</string>
+    <string name="access_enable_title">برای شروع، دسترسی اسکن را فعال کنید</string>
+    <string name="access_enable_body">بسته‌یاب فقط محتوای قابل مشاهده‌ی صفحه‌ی بسته‌های اپراتوری را که خودتان باز میکنید میخواند؛ خریدی انجام نمیدهد و اطلاعاتی ارسال نمیکند.</string>
+    <string name="access_enable_button">فعالسازی دسترسی اندروید</string>
+    <string name="access_confirm_title">تأیید دسترسی</string>
+    <string name="access_confirm_body">این سرویس فقط برای خواندن اطلاعات قابل مشاهده‌ی بستهها در اپراتور انتخابی استفاده میشود. متن خام صفحه ذخیره یا ارسال نمیشود و هیچ خریدی انجام نمیشود. برای ادامه، تنظیمات دسترسیپذیری باز شود؟</string>
+    <string name="not_now">فعلاً نه</string>
+    <string name="open_settings">باز کردن تنظیمات</string>
+
+    <string name="theme_cyber">سایبری</string>
+    <string name="theme_mono">تکرنگ</string>
+    <string name="theme_light">روشن</string>
+    <string name="theme_auto">خودکار</string>
+    <string name="currency_toman">تومان</string>
+    <string name="currency_rial">ریال</string>
+
+    <string name="compare_title">مقایسه‌ی بستهها</string>
+    <string name="settings_title">تنظیمات</string>
+    <string name="close">بستن</string>
+    <string name="cancel">لغو</string>
+    <string name="save">ذخیره</string>
+    <string name="confirm">تأیید</string>
+    <string name="clear_data">پاک کردن اطلاعات</string>
+    <string name="clear_data_body">همه‌ی بستههای ذخیرهشده و تاریخچه‌ی تغییرات حذف شوند؟</string>
+    <string name="clear_confirm">پاک شود</string>
+
+    <string name="review_queue">صف بازبینی بستههای مبهم</string>
+    <string name="review_approve">تأیید و ورود به مقایسه</string>
+    <string name="review_reject">رد این بسته</string>
+    <string name="review_reason">علت نیاز به بازبینی</string>
+    <string name="review_hint">مقادیر استخراجشده تغییر نمیکنند؛ مقادیر تأییدشده جدا ذخیره میشوند.</string>
+    <string name="export_warning">خروجی شامل عنوان بستهها (متن صفحه) است. پیش از اشتراکگذاری آن را بررسی و در صورت نیاز ناشناس کنید.</string>
+    <string name="export_continue">ادامه و ذخیره</string>
+
+    <string name="dialog_package_details">جزئیات بسته</string>
+    <string name="action_review">بازبینی این بسته</string>
+    <string name="price_unknown">قیمت این بسته بهصورت قطعی شناسایی نشد.</string>
+    <string name="price_unknown_hint">تا بررسی دوباره، در رتبهبندی و مقایسه استفاده نمیشود.</string>
+    <string name="version_prefix">نسخه</string>
+    <string name="scan_new">اسکن جدید</string>
+    <string name="close_report">بستن گزارش</string>
+</resources>

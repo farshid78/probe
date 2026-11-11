@@ -1,0 +1,1 @@
+package android.graphics; public class Path { public void reset(){} public void moveTo(float x,float y){} public void lineTo(float x,float y){} public void cubicTo(float a,float b,float c,float d,float e,float f){} public void close(){} }

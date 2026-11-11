@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <dimen name="card_corner">28dp</dimen>
+    <dimen name="gutter">28dp</dimen>
+    <dimen name="touch_target">56dp</dimen>
+    <dimen name="overlay_max_width">520dp</dimen>
+    <dimen name="panel_max_width">440dp</dimen>
+</resources>

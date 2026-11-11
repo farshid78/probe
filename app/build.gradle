@@ -1,0 +1,107 @@
+plugins {
+    id 'com.android.application'
+}
+
+import java.util.Properties
+
+def signingPropertiesFile = rootProject.file("keystore.properties")
+def signingProperties = new Properties()
+if (signingPropertiesFile.exists()) {
+    signingPropertiesFile.withInputStream { stream -> signingProperties.load(stream) }
+}
+
+// A single monotonic policy: local builds stay at 1; CI injects the published versionCode.
+// The release workflow verifies this value against the previous release's version-code.txt.
+def ciVersionCode = Integer.parseInt(System.getenv('BH_VERSION_CODE') ?: '1')
+def ciVersionName = System.getenv('BH_VERSION_NAME') ?: '1.9.0'
+
+android {
+    namespace 'app.bastehyab'
+    compileSdk 36
+    buildToolsVersion '35.0.0'
+
+    defaultConfig {
+        applicationId 'app.bastehyab'
+        minSdk 24
+        targetSdk 36
+        versionCode ciVersionCode
+        versionName ciVersionName
+        testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
+        resValue 'string', 'app_version', ciVersionName
+    }
+
+    signingConfigs {
+        release {
+            if (signingPropertiesFile.exists()) {
+                def requiredKeys = ['storeFile', 'storePassword', 'keyAlias', 'keyPassword']
+                def missingKeys = requiredKeys.findAll { !signingProperties.getProperty(it)?.trim() }
+                if (!missingKeys.isEmpty()) {
+                    throw new GradleException("keystore.properties فاقد مقادیر لازم است: ${missingKeys.join(', ')}")
+                }
+                def releaseStore = rootProject.file(signingProperties.getProperty('storeFile').trim())
+                if (!releaseStore.isFile()) {
+                    throw new GradleException("فایل کلید انتشار پیدا نشد: ${releaseStore}")
+                }
+                storeFile releaseStore
+                storePassword signingProperties.getProperty('storePassword')
+                keyAlias signingProperties.getProperty('keyAlias')
+                keyPassword signingProperties.getProperty('keyPassword')
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            if (signingPropertiesFile.exists()) signingConfig signingConfigs.release
+        }
+        debug {
+            // A different applicationId prevents a debuggable APK from ever replacing a
+            // production install, even when both artifacts are built in the same CI run.
+            applicationIdSuffix '.debug'
+            versionNameSuffix '-debug'
+            minifyEnabled false
+        }
+    }
+
+    buildFeatures {
+        buildConfig true
+        resValues true
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    testOptions {
+        unitTests.includeAndroidResources = true
+        animationsDisabled = true
+    }
+
+    lint {
+        abortOnError true
+        checkReleaseBuilds false
+        lintConfig file('lint.xml')
+        disable 'OldTargetApi'
+    }
+}
+
+dependencies {
+    implementation 'androidx.activity:activity:1.9.3'
+    implementation 'androidx.core:core:1.13.1'
+    implementation 'androidx.lifecycle:lifecycle-viewmodel:2.8.7'
+    implementation 'androidx.lifecycle:lifecycle-livedata:2.8.7'
+    implementation 'androidx.recyclerview:recyclerview:1.3.2'
+
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.robolectric:robolectric:4.16.1'
+    testImplementation 'androidx.test:core:1.6.1'
+
+    androidTestImplementation 'androidx.test.ext:junit:1.2.1'
+    androidTestImplementation 'androidx.test:runner:1.6.2'
+    androidTestImplementation 'androidx.test:rules:1.6.1'
+    androidTestImplementation 'androidx.test.espresso:espresso-core:3.6.1'
+}

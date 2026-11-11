@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<lint>
+    <issue id="UnusedResources" severity="ignore"/>
+    <issue id="MissingTranslation" severity="ignore"/>
+    <issue id="OldTargetApi" severity="ignore"/>
+    <issue id="Deprecated" severity="warning"/>
+    <issue id="ContentDescription" severity="error"/>
+    <issue id="HardcodedText" severity="error"/>
+</lint>

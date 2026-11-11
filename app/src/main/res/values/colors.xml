@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Design tokens for the "Neumorphic Security" language. Runtime values live in UI.java
+     so the three themes can be switched without recreating resources. -->
+<resources>
+    <color name="neu_bg_dark">#FF101825</color>
+    <color name="neu_card_dark">#FF182231</color>
+    <color name="neu_card2_dark">#FF1F2C3E</color>
+    <color name="neu_stroke_dark">#FF33465C</color>
+    <color name="neu_primary_dark">#FF4DE0C8</color>
+    <color name="neu_accent_dark">#FF9C8CFF</color>
+    <color name="neu_text_dark">#FFF2F7FA</color>
+    <color name="neu_muted_dark">#FFA9BCCB</color>
+
+    <color name="neu_bg_light">#FFE9EEF7</color>
+    <color name="neu_card_light">#FFE9EEF7</color>
+    <color name="neu_card2_light">#FFDDE5F1</color>
+    <color name="neu_stroke_light">#FFC7D2E4</color>
+    <color name="neu_primary_light">#FF0B6E75</color>
+    <color name="neu_accent_light">#FF4734A8</color>
+    <color name="neu_text_light">#FF16233A</color>
+    <color name="neu_muted_light">#FF4A5B70</color>
+</resources>

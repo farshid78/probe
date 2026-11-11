@@ -1,0 +1,31 @@
+# Android / Gradle
+.gradle/
+**/build/
+local.properties
+.externalNativeBuild/
+.cxx/
+
+# Signing and local secrets
+*.jks
+*.keystore
+*.p12
+*.pem
+signing.properties
+keystore.properties
+
+# IDE / OS
+.idea/
+*.iml
+.DS_Store
+Thumbs.db
+
+# Captured operator screens (contain phone numbers and notifications). Never commit.
+captures/
+dumps/
+*_tree.txt
+*_shot.jpg
+
+# Build archives are release assets, never source
+*.zip
+_src/
+dist/

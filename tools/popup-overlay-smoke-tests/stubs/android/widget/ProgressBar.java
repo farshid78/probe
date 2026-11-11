@@ -1,0 +1,2 @@
+package android.widget; import android.content.Context; import android.util.AttributeSet;
+public class ProgressBar extends android.view.View { public ProgressBar(Context c, AttributeSet a, int s){super(c);} public void setMax(int m){} public void setProgress(int p){} public void setProgressTintList(android.content.res.ColorStateList l){} public void setProgressBackgroundTintList(android.content.res.ColorStateList l){} }
