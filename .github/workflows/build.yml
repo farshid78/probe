@@ -165,13 +165,15 @@ jobs:
       - name: Verify monotonic version code against the prior release
         id: version
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           cd "$EXTRACT_DIR"
           code="${BH_VERSION_CODE:-1}"
           [[ "$code" =~ ^[0-9]+$ && "$code" -ge 1 ]] || { echo 'BH_VERSION_CODE must be a positive integer'; exit 1; }
           export BH_VERSION_CODE="$code"
-          gh api --paginate /repos/${{ github.repository }}/releases > /tmp/releases.json
+          gh api --paginate /repos/${{ github.repository }}/releases | jq -s 'add // []' > /tmp/releases.json
           python3 - <<'PY'
           import json, os, sys
           releases = json.load(open('/tmp/releases.json'))
