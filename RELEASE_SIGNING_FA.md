@@ -38,7 +38,7 @@ sha256sum app/build/outputs/apk/release/app-release.apk
 - [ ] `targetSdk 36`، حداقل API 24، آیکون تطبیقی + لایهٔ monochrome، فونتهای دارای مجوز (`OFL`/DejaVu) و `LICENSE`.
 - [ ] حریم خصوصی: لینک Privacy Policy معتبر، فرم Data safety بدون تناقض، عدم درخواست مجوزهای بیهوده.
 - [ ] محدودیتهای دستگاه: اسکن تنها برای بستههای پیکربندیشدهٔ اپراتورها، تأیید صفحه پیش از پیمایش، توقف ایمن، عدم خودکارسازی خرید/فعالسازی.
-- [ ] نسخه: `versionCode` یکنواخت و افزایشی (workflow آن را در برابر آخرین Release بررسی میکند)، `versionName` منطبق بر `app/build.gradle`.
+- [ ] نسخه: `versionCode` از `github.run_number` گرفته میشود و workflow آن را در برابر آخرین Release بررسی میکند، `versionName` منطبق بر `app/build.gradle`.
 - [ ] تست دستگاهی پنج اپراتور مطابق `tools/device-acceptance/README_FA.md` پیش از انتشار عمومی.
 
 > صفحهٔ رسمی [Use of the AccessibilityService API](https://support.google.com/googleplay/android-developer/answer/10964491?hl=en) در ۱۱ نوامبر ۲۰۲۶ واکشی و خلاصهٔ الزامات آن در `PLAY_POLICY_AUDIT_FA.md` ثبت شد. همچنان اعلام رسمی در Play Console، ویدئوی نمایش افشا و تأیید نهایی Data safety توسط حساب توسعهدهنده خارج از سندباکس است.
