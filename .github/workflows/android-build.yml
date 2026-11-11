@@ -30,10 +30,10 @@ jobs:
           set -euo pipefail
           mapfile -t zips < <(git ls-files '*.zip')
           if [ "${#zips[@]}" -ne 1 ]; then
-            echo "::error::Expected exactly one committed .zip archive, found ${#zips[@]}: ${zips[*]:-none}"
+            echo "::error::Expected exactly one committed .zip archive, found ${#zips[@]}"
             exit 1
           fi
-                    SRC="$GITHUB_WORKSPACE/_src""
+          SRC="$GITHUB_WORKSPACE/_src"
           rm -rf "$SRC"
           mkdir -p "$SRC"
           unzip -q "${zips[0]}" -d "$SRC"
@@ -157,10 +157,10 @@ jobs:
           set -euo pipefail
           mapfile -t zips < <(git ls-files '*.zip')
           if [ "${#zips[@]}" -ne 1 ]; then
-            echo "::error::Expected exactly one committed .zip archive, found ${#zips[@]}: ${zips[*]:-none}"
+            echo "::error::Expected exactly one committed .zip archive, found ${#zips[@]}"
             exit 1
           fi
-          SRC="$RUNNER_TEMP/src"
+          SRC="$GITHUB_WORKSPACE/_src"
           rm -rf "$SRC"
           mkdir -p "$SRC"
           unzip -q "${zips[0]}" -d "$SRC"
@@ -198,7 +198,7 @@ jobs:
           gradle-version: '8.7'
           cache-provider: basic
 
-      - name: Compute release version code
+      - name: Compute release versionCode
         shell: bash
         run: |
           set -euo pipefail
@@ -216,34 +216,28 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          LATEST_TAG="$(gh release list --limit 100 --json tagName,isDraft,isPrerelease \
-            --jq '[.[] | select(.isDraft == false) | select(.isPrerelease == false)][0].tagName // ""')"
-          if [ -z "$LATEST_TAG" ]; then
-            echo "No earlier Bastehyab release found; versionCode baseline accepted."
+          latest_tag="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name 2>/dev/null || true)"
+          if [ -z "$latest_tag" ]; then
+            echo "No earlier release found; versionCode baseline accepted."
             exit 0
           fi
-          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
-          if [ -z "$SDK_ROOT" ]; then
-            echo "::error::Android SDK root is not configured."
+          prev_dir="$RUNNER_TEMP/previous-release"
+          mkdir -p "$prev_dir"
+          if ! gh release download "$latest_tag" --pattern 'Bastehyab-Release.apk' --dir "$prev_dir"; then
+            echo "::error::Could not download the latest published APK."
             exit 1
           fi
-          export PATH="$SDK_ROOT/build-tools/34.0.0:$PATH"
-          PREVIOUS_DIR="$RUNNER_TEMP/previous-release"
-          mkdir -p "$PREVIOUS_DIR"
-          if ! gh release download "$LATEST_TAG" --pattern 'Bastehyab-Release.apk' --dir "$PREVIOUS_DIR"; then
-            echo "::error::Could not retrieve the latest published APK to validate versionCode."
-            exit 1
-          fi
-          PREVIOUS_CODE="$(aapt dump badging "$PREVIOUS_DIR/Bastehyab-Release.apk" | sed -n "s/.*versionCode='\([0-9][0-9]*\)'.*/\1/p" | head -n 1)"
-          if [ -z "$PREVIOUS_CODE" ]; then
+          aapt_bin="${ANDROID_HOME}/build-tools/34.0.0/aapt"
+          prev_code="$("$aapt_bin" dump badging "$prev_dir/Bastehyab-Release.apk" | grep -o "versionCode='[0-9]*'" | head -n 1 | grep -o '[0-9]*')"
+          if [ -z "$prev_code" ]; then
             echo "::error::Could not read previous Release versionCode."
             exit 1
           fi
-          if [ "$BH_VERSION_CODE" -le "$PREVIOUS_CODE" ]; then
-            echo "::error::New versionCode ($BH_VERSION_CODE) must exceed published ($PREVIOUS_CODE)."
+          if [ "$BH_VERSION_CODE" -le "$prev_code" ]; then
+            echo "::error::New versionCode ($BH_VERSION_CODE) must exceed published ($prev_code)."
             exit 1
           fi
-          echo "Published code $PREVIOUS_CODE -> candidate $BH_VERSION_CODE" >> "$GITHUB_STEP_SUMMARY"
+          echo "Published code $prev_code -> candidate $BH_VERSION_CODE" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Validate signing secrets
         env:
@@ -269,47 +263,27 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-          KEYSTORE_PATH: ${{ runner.temp }}/bastehyab-release.jks
         shell: bash
         run: |
           set -euo pipefail
-          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH"
-          test -s "$KEYSTORE_PATH"
-          chmod 600 "$KEYSTORE_PATH"
-          python3 - <<'PY'
-          import os
-          from pathlib import Path
-          def esc(value):
-              out=[]
-              for i,ch in enumerate(value):
-                  n=ord(ch)
-                  if ch == "\\": out.append("\\\\")
-                  elif ch == "\t": out.append("\\t")
-                  elif ch == "\n": out.append("\\n")
-                  elif ch == "\r": out.append("\\r")
-                  elif ch == "\f": out.append("\\f")
-                  elif ch in "=:# !" and (ch != " " or i == 0): out.append("\\"+ch)
-                  elif n < 0x20 or n > 0x7e:
-                      b=ch.encode("utf-16-be")
-                      if len(b)==2: out.append(f"\\u{int.from_bytes(b,'big'):04x}")
-                      else: out.append(f"\\u{int.from_bytes(b[:2],'big'):04x}\\u{int.from_bytes(b[2:],'big'):04x}")
-                  else: out.append(ch)
-              return "".join(out)
-          values={
-              "storeFile": os.environ["KEYSTORE_PATH"],
-              "storePassword": os.environ["KEYSTORE_PASSWORD"],
-              "keyAlias": os.environ["KEY_ALIAS"],
-              "keyPassword": os.environ["KEY_PASSWORD"],
-          }
-          target = Path(os.environ["PROJECT_DIR"], "keystore.properties")
-          target.write_bytes(("\n".join(f"{k}={esc(v)}" for k,v in values.items())+"\n").encode("ascii"))
-          PY
+          keystore_path="$RUNNER_TEMP/bastehyab-release.jks"
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$keystore_path"
+          test -s "$keystore_path"
+          chmod 600 "$keystore_path"
+          props="$GITHUB_WORKSPACE/_src/$PROJECT_DIR/keystore.properties"
+          {
+            printf 'storeFile=%s\n' "$keystore_path"
+            printf 'storePassword=%s\n' "$KEYSTORE_PASSWORD"
+            printf 'keyAlias=%s\n' "$KEY_ALIAS"
+            printf 'keyPassword=%s\n' "$KEY_PASSWORD"
+          } > "$props"
+          chmod 600 "$props"
 
       - name: Build signed Release APK
         shell: bash
         run: |
           set -euo pipefail
-          cd "$PROJECT_DIR"
+          cd "$GITHUB_WORKSPACE/_src/$PROJECT_DIR"
           test -s keystore.properties
           gradle --no-daemon --stacktrace clean :app:assembleRelease
           APK="$(find app/build/outputs/apk/release -type f -name '*.apk' -print -quit)"
@@ -326,42 +300,36 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          APK="$GITHUB_WORKSPACE/dist/Bastehyab-Release.apk"
-          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
-          if [ -z "$SDK_ROOT" ]; then
-            echo "::error::Android SDK root is not configured."
-            exit 1
-          fi
-          BUILD_TOOLS="$SDK_ROOT/build-tools/34.0.0"
-          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK"
-          "$BUILD_TOOLS/zipalign" -c -v 4 "$APK"
-          "$BUILD_TOOLS/aapt" dump badging "$APK" | tee "$RUNNER_TEMP/bastehyab-badging.txt"
-          grep -q "name='app.bastehyab'" "$RUNNER_TEMP/bastehyab-badging.txt"
-          grep -q "versionCode='$BH_VERSION_CODE'" "$RUNNER_TEMP/bastehyab-badging.txt"
-          sha256sum "$APK" > "$GITHUB_WORKSPACE/dist/SHA256.txt"
-          TAG="bastehyab-build-${GITHUB_RUN_NUMBER}"
-          NOTES="$RUNNER_TEMP/release-notes.md"
-          cat > "$NOTES" <<NOTES
-          نسخهٔ Release بسته‌یاب 1.9.0
-
-          - versionCode: $BH_VERSION_CODE
-          - Android minSdk: 24
-          - APK با کلید انتشار پروژه امضا و با apksigner بررسی شده است.
-          - خروجی Debug برای نصب به‌عنوان به‌روزرسانی Release مناسب نیست.
-          NOTES
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" "$APK" "$GITHUB_WORKSPACE/dist/SHA256.txt" --clobber
-            gh release edit "$TAG" --title "Bastehyab 1.9.0 build ${GITHUB_RUN_NUMBER}" --notes-file "$NOTES"
+          apk="$GITHUB_WORKSPACE/dist/Bastehyab-Release.apk"
+          build_tools="${ANDROID_HOME}/build-tools/34.0.0"
+          "$build_tools/apksigner" verify --verbose --print-certs "$apk"
+          "$build_tools/zipalign" -c -v 4 "$apk"
+          "$build_tools/aapt" dump badging "$apk" > "$RUNNER_TEMP/badging.txt"
+          grep -q "name='app.bastehyab'" "$RUNNER_TEMP/badging.txt"
+          grep -q "versionCode='${BH_VERSION_CODE}'" "$RUNNER_TEMP/badging.txt"
+          sha256sum "$apk" > "$GITHUB_WORKSPACE/dist/SHA256.txt"
+          tag="bastehyab-build-${GITHUB_RUN_NUMBER}"
+          notes="$RUNNER_TEMP/release-notes.md"
+          {
+            echo "نسخهٔ Release بسته‌یاب 1.9.0"
+            echo
+            echo "- versionCode: ${BH_VERSION_CODE}"
+            echo "- Android minSdk: 24"
+            echo "- APK با کلید انتشار پروژه امضا و با apksigner بررسی شده است."
+            echo "- خروجی Debug برای نصب به‌عنوان به‌روزرسانی Release مناسب نیست."
+          } > "$notes"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "$apk" "$GITHUB_WORKSPACE/dist/SHA256.txt" --clobber
+            gh release edit "$tag" --title "Bastehyab 1.9.0 build ${GITHUB_RUN_NUMBER}" --notes-file "$notes"
           else
-            gh release create "$TAG" "$APK" "$GITHUB_WORKSPACE/dist/SHA256.txt" \
+            gh release create "$tag" "$apk" "$GITHUB_WORKSPACE/dist/SHA256.txt" \
               --title "Bastehyab 1.9.0 build ${GITHUB_RUN_NUMBER}" \
-              --notes-file "$NOTES"
+              --notes-file "$notes"
           fi
 
       - name: Remove temporary signing material
         if: always()
         shell: bash
         run: |
-          set +e
-          if [ -n "${PROJECT_DIR:-}" ]; then rm -f "$PROJECT_DIR/keystore.properties"; fi
-          rm -f "$RUNNER_TEMP/bastehyab-release.jks"
+          rm -f "$GITHUB_WORKSPACE/_src/$PROJECT_DIR/keystore.properties" || true
+          rm -f "$RUNNER_TEMP/bastehyab-release.jks" || true
