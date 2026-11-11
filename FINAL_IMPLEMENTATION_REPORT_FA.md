@@ -2,62 +2,83 @@
 
 # گزارش پیادهسازی نهایی بسته‌یاب — نسخهٔ 1.9.0
 
-**تاریخ:** ۲۰۲۶‑۱۱‑۱۱ (UTC) · **شاخه:** `arena/13f0ddd9-probe` · **بسته:** `Bastehyab-Obsidian-1.8.2-source.zip`
+**تاریخ:** ۲۰۲۶‑۱۱‑۱۱ (UTC) · **شاخهٔ فعال:** `arena/1df888b4-probe` · **مبنا:** `a8e09e13cb769c236cc30f9a88043140d1614a3e` · **بسته:** `Bastehyab-Obsidian-1.8.2-source.zip`
+
+> این سند نسخهٔ بهروزشدهٔ گزارش پیادهسازی پس از **فاز تکمیلی ۱۱ موردی** است. خلاصهٔ مرحلهبهمرحله در بند ۷ و وضعیت دقیق خطخوردگیها در `NEXT_STEPS_CHECKLIST_FA.md` آمده است.
 
 ## ۱. مبنا و تصمیم ساختاری
 
-ممیزی `PROJECT_REVIEW_FA.md` روی نسخهٔ تاریخی 1.8.2 انجام شد: **۱۴ یافتهٔ P0، ۳۰ یافتهٔ P1، ۲۴ یافتهٔ P2 و ۶ یافتهٔ P3**؛ در کنار ۷۴ یافتهٔ شمارهدار، ۱۴ قابلیت ناقص/بلااستفاده فهرست شده بود (مجموع ۸۸ مورد). بنا به تصمیم نهایی، ساختار مخزن **ZIPمحور** باقی ماند: همان آرشیو قدیمی با سورس نهایی بازنویسی شد و فایلهای استخراجشدهٔ اضافی از ریشه حذف شدند. CI نیز از یک workflow واحد، آرشیو را بهصورت امن و موقت استخراج کرده و میسازد. بنابراین پیشنهاد اولیهٔ ممیزی مبنی بر استخراج دائمی سورس به ریشه، آگاهانه جایگزین شد.
+ممیزی `PROJECT_REVIEW_FA.md` روی نسخهٔ تاریخی 1.8.2 انجام شد: **۱۴ یافتهٔ P0، ۳۰ یافتهٔ P1، ۲۴ یافتهٔ P2 و ۶ یافتهٔ P3**؛ در کنار ۷۴ یافتهٔ شمارهدار، ۱۴ قابلیت ناقص/بلااستفاده فهرست شده بود (مجموع ۸۸ مورد). بنا به تصمیم نهایی، ساختار مخزن **ZIPمحور** باقی ماند: آرشیو قدیمی با سورس نهایی بازنویسی شد و فایلهای استخراجشدهٔ اضافی از ریشه حذف شدند. CI از یک workflow واحد، آرشیو را بهصورت امن و موقت استخراج کرده و میسازد.
 
-نسخهٔ محتوای برنامه **1.9.0** است؛ نام `Bastehyab-Obsidian-1.8.2-source.zip` فقط برای حفظ سازگاری لینکها نگه داشته شد. نسخه از `app/build.gradle` به `BuildConfig`، `resValue string/app_version`، صفحهٔ آغازین و هدر تشخیصی تزریق میشود و دیگر 1.6.5/1.6.8/1.7.9/1.8.0/1.8.2 بهعنوان متادیتای جاری وجود ندارند.
-- ناوبری برگشت از `Activity.onBackPressed()` منسوخشده به `androidx.activity.OnBackPressedDispatcher` منتقل شد؛ بنابراین ژست پیشبینانهٔ برگشت در Android 16 / API 36 نیز ابتدا اسپلش یا تب را میبندد و سپس برنامه را ترک میکند. Lint `GestureBackNavigation` دیگر خطایی تولید نمیکند. ویژگیهای `enableOnBackInvokedCallback` (API 33) و `windowLightNavigationBar` (API 27) نیز با `tools:targetApi` و حذف آیتم استایل تکراری، بدون نقض `minSdk 24` پاکسازی شدند و خطاهای `NewApi` حذف شدند. پس از ادغام PR #1 در `main`، مرحلهٔ محافظتشدهٔ Release نیز برای احراز هویت `gh api` با `GH_TOKEN` و ترکیب صحیح صفحات JSON با `jq -s` اصلاح شد.
+نسخهٔ محتوای برنامه **1.9.0** است؛ نام `Bastehyab-Obsidian-1.8.2-source.zip` فقط برای حفظ سازگاری لینکها نگه داشته شد. نسخه از `app/build.gradle` به `BuildConfig`، `resValue string/app_version`، صفحهٔ آغازین و هدر تشخیصی تزریق میشود. PR #1 و PR #7 پیشتر در `main` ادغام شدند، CI نهایی `43020056900` سبز شد و Release `v1.9.0-1` از نوع unsigned منتشر شد. فاز تکمیلی حاضر روی شاخهٔ فعال و بدون ادغام مجدد انجام شد؛ بنابراین اجرای remote CI پس از push صورت میگیرد.
+
+- ناوبری برگشت از `Activity.onBackPressed()` منسوخشده به `androidx.activity.OnBackPressedDispatcher` منتقل شد.
+- ویژگیهای `enableOnBackInvokedCallback` (API 33) و `windowLightNavigationBar` (API 27) با `tools:targetApi` و حذف آیتم استایل تکراری پاکسازی شدند.
+- مرحلهٔ محافظتشدهٔ Release برای `gh api` با `GH_TOKEN` و ترکیب صفحات JSON با `jq -s` اصلاح شد.
 
 ## ۲. خلاصهٔ اصلاحات بر پایهٔ ۸۸ یافته
 
 | دسته | وضعیت | مهمترین تغییرات |
 |---|---|---|
-| ساختار، مستندات و CI (۱–۶) | انجامشده | یک ZIP، یک workflow، حذف workflow متناقض، اکشنها با SHA پینشده، `contents: read`، اجرای تمام تستهای JVM، Lint، JUnit و Debug APK؛ پاکسازی ریشه |
-| Build و انتشار (۷–۱۳) | انجامشده | API 36 / AGP 8.11.1 / Gradle 8.13، checksum رسمی wrapper، JDK 17، `versionCode` واحد و افزایشی، تفکیک امضای Debug/Release، minify و ProGuard release، حذف `returnDefaultValues` |
-| کیفیت و تست (۱۴–۱۸) | انجامشده | بازنویسی قراردادهای منسوخ `grep`، کنتراست عددی سه تم، تست رفتاری بهجای متنخوانی، ۱۷ رگرسیون JUnit و ۷ مجموعه تست JVM، پوشش Extractor/Compare/Store/History/VAT/CSV/پنجره |
-| اسکن و سرویس (۱۹–۳۲) | انجامشده / ریسک کاهش‌یافته | تأیید صریح شروع مجدد، `packageNames` پویا، نگهبان پنجرهٔ فعال پیش از swipe، فیلتر رویداد اسکرول به viewport عمودی، بهروزرسانی `fg` با `CONTENT_CHANGED`، `ScanPhase` نوعدار، auto-hide بدون ریست، محدودسازی overlay و چرخش صفحه، fingerprint ۶۴بیتی، درصد واقعی پیمایش، ۳۰ snapshot |
-| Parser، دامنه و ذخیره (۳۳–۴۵) | عمدتاً انجامشده | شواهد صریف VAT و جلوگیری از مالیات دوبار، جداکنندههای هزارگان، متریک چهارم، کلید پایدار ساختاری، اعتبار ۳ساله، بررسی دستی هشتآرگومانی، تازگی رکورد، تاریخچهٔ ۰→مثبت، هشدار دادهٔ قدیمی/مبهم، خروجی CSV کامل، ذخیرهٔ اتمی با پشتیبان مرحلهای و تلاش دوباره |
-| معماری و کد (۴۶–۵۳) | نسبی | ۴۰۱ رشتهٔ XML، accessor واحد `S`، تمها/دایمنشنها/فونتهای محلی، دیالوگهای همنوا، پاکسازی کد تکراری، متادیتای پویا، حذف استکتریس لاگ؛ کلاسهای بزرگ و لایهبندی کامل ViewModel همچنان باقی است |
-| UI/UX و دسترسپذیری (۵۴–۶۹) | عمدتاً انجامشده | کنتراست WCAG AA، حداقل 12sp و اهداف 48dp، چیپهای اسکرولپذیر، پنجرهٔ محدود و اسکرول داخلی، برچسب TalkBack، اسپلش قابل رد/بهمراهداشتن، ذخیرهٔ وضعیت فرم و تب، صفحهکلید عددی، Back دومرحلهای با `OnBackPressedDispatcher` (سازگار با ژست برگشت API 36)، ellipsis آمار، رندر تنها با تغییر واقعی و `Compare.run` یکبار |
-| حریم خصوصی و امنیت (۷۰–۷۴) | انجامشده | محدودسازی سرویس به اپراتورها، نگهبان foreground، حذف متن خام از ذخیره، تأیید صریح پیش از خروجی، ناشناسسازی شماره/ایمیل/UUID/شناسهٔ بلند، عدم وجود `INTERNET`، `allowBackup=false`، قوانین شبکه/backup و حذف نودهای editable/password |
-| ۱۴ قابلیت بلااستفاده | نسبی | `PER_GB_MONTH`، `History.Change.percent()` و ویژگیهای مشابه فعال یا تست شدند؛ `Op.policy`/`reprice()`، `monthlyCost()/perGbMonth()` و کلاسهای تزئینی قدیمی آگاهانه بدون رابط کاربری باقی ماندند تا رفتار مقایسه تغییر نکند |
+| ساختار، مستندات و CI (۱–۶) | انجامشده | یک ZIP، یک workflow، اکشنها با SHA پینشده، `contents: read`، ۱۰ مجموعه تست JVM، اعتبارسنجی صریح منابع، Lint، JUnit و APK؛ workflow ریشه و داخل ZIP یکسان |
+| Build و انتشار (۷–۱۳) | انجامشده | API 36 / AGP 8.11.1 / Gradle 8.13، checksum رسمی wrapper، JDK 17، `versionCode` واحد و افزایشی، minify/ProGuard، `keystore.properties` اختیاری و پاکسازی کلید در runner |
+| کیفیت و تست (۱۴–۱۸) | انجامشده | ۳۴ رگرسیون JUnit، ۱۰ fixture نسخهدار × ۱۳۲ بررسی، ۵۰ فایل XML، ۴ جدول sfnt، ماتریس پذیرش ۵۰ ردیفی، کنتراست عددی سه تم و قراردادهای معماری/UI |
+| اسکن و سرویس (۱۹–۳۲) | انجامشده | `ScanStateMachine` انتقالمحور جای ۶ پرچم volatile، `ScanPhase` نوعدار، `ListEndDetector` با شواهد پایان، `packageNames` پویا، نگهبان پنجرهٔ فعال، fingerprint ۶۴بیتی و قفل رضایت درونبرنامهای |
+| Parser، دامنه و ذخیره (۳۳–۴۵) | انجامشده | `ProviderAdapter` منبع واحد ۵ اپراتور، `Evidence` field-level، قانون واحد VAT در `Pkg.finalToman`، متریک چهارم، کلید پایدار، اعتبار ۳ساله، تازگی رکورد، ذخیرهٔ اتمی و خروجی CSV کامل |
+| معماری و کد (۴۶–۵۳) | انجامشده | ۴۱۲ رشتهٔ XML، `S` accessor واحد، ۸ کلاس تکمسئولیت، پکیجهای `provider`/`diagnostics`، `RecyclerView`/`DiffUtil`/`ViewModel`/`LiveData`، حذف `pkgRow` و کلاس درونی لوگو، `ARCHITECTURE_FA.md` |
+| UI/UX و دسترسپذیری (۵۴–۶۹) | انجامشده | کنتراست WCAG AA، حداقل 12sp و اهداف 48dp، چیپهای اسکرولپذیر، پنجرهٔ محدود، برچسب TalkBack، اسپلش قابل رد، ذخیرهٔ وضعیت فرم/تب، صفحهکلید عددی، Back دومرحلهای و افشای برجستهٔ Accessibility |
+| حریم خصوصی و امنیت (۷۰–۷۴) | انجامشده | عدم وجود `INTERNET`، `allowBackup=false`، محدودسازی سرویس به اپراتورها، عدم ذخیرهٔ متن خام، تأیید صریح پیش از خروجی، ناشناسسازی و ممیزی سیاست رسمی Play |
+| ۱۴ قابلیت بلااستفاده | انجامشده | `Op.policy` دارای رابط کاربری و `Store.reprice` شد؛ `monthlyCost()/perGbMonth()` یکسانسازی شد؛ متدهای بدون فراخوان و کلاسهای تزئینی حذف یا به قرارداد تبدیل شدند |
 
-## ۳. تغییرات امنیتی و حریم خصوصی قابل توجه
+## ۳. تغییرات امنیتی، حریم خصوصی و سیاست Play
 
-- `ScanService.refreshServiceInfo()` فقط بستههای پیکربندیشدهٔ اپراتورها را در `AccessibilityServiceInfo.packageNames` قرار میدهد و هنگام ویرایش اپراتورها دوباره اعمال میشود.
-- پیش از تزریق swipe هنگام `root == null`، `targetWindowIsActive()` وجود پنجرهٔ فعال و متعلق به اپراتور دقیق را تأیید میکند؛ در غیر اینصورت gestures متوقف میشود.
-- رویدادهای `TYPE_VIEW_SCROLLED` فقط از منبعی پذیرفته میشوند که قابل مشاهده، اسکرولپذیر و عمودی باشد؛ carouselها و لیستهای تودرتو نمیتوانند «پایان فهرست» جعلی بسازند.
-- هنگام خروجی CSV و `diag.txt`، دیالوگ تأیید نمایش داده میشود و `Privacy.scrub()` شمارهٔ همراه، ایمیل، UUID و شناسههای عددی بلند را ناشناس میکند. فیلدهای عددی ساختاریافته دستنخورده میمانند.
-- لاگها فقط نام کلاس خطا را مینویسند، نه استکتریس یا متن صفحه. `lastScanStatus` و تشخیصها دیگر نسخهٔ ثابت یا محتوای خام نگه نمیدارند.
+- `ScanService.refreshServiceInfo()` فقط بستههای پیکربندیشدهٔ اپراتورها را در `AccessibilityServiceInfo.packageNames` قرار میدهد.
+- پیش از تزریق swipe، `targetWindowIsActive()` پنجرهٔ فعال و متعلق به اپراتور دقیق را تأیید میکند. رویدادهای `TYPE_VIEW_SCROLLED` فقط از منبع عمودی قابل مشاهده پذیرفته میشوند.
+- هنگام خروجی CSV و `diag.txt`، دیالوگ تأیید نمایش داده میشود و `Privacy.scrub()` شمارهٔ همراه، ایمیل، UUID و شناسههای عددی بلند را ناشناس میکند.
+- `PLAY_POLICY_AUDIT_FA.md` بر اساس صفحات رسمی [Use of the AccessibilityService API](https://support.google.com/googleplay/android-developer/answer/10964491?hl=en) و [Permissions and APIs that Access Sensitive Information](https://support.google.com/googleplay/android-developer/answer/16558241?hl=en) تهیه شد. `isAccessibilityTool` اعلام نشد؛ افشای جداگانه در شروع عادی برنامه، `CheckBox` رضایت مثبت، ذخیرهٔ نسخهدار در `Cfg` و `ABORT` در `startFull`/`confirmFull` بدون رضایت پیادهسازی شد.
+- لاگها فقط نام کلاس خطا را مینویسند، نه استکتریس یا متن صفحه. `lastScanStatus` و تشخیصها محتوای خام نگه نمیدارند.
 
 ## ۴. تستها و اعتبارسنجی محلی
 
-دستور واحد `bash tools/run-all-checks.sh` روی JVM اجرا شد و **همهٔ بخشها PASS** شدند:
+دستور واحد `bash tools/run-all-checks.sh` روی JVM اجرا شد و **همهٔ بخشها PASS / `CHECKS_EXIT=0`** شدند:
 
-- کامپایل ECJ با Android API 36: `COMPILE OK: 22 sources` production (بههمراه ۳ double سبک برای AndroidX در harness محلی).
-- ۵ مجموعهٔ smoke قدیمی/جدید: parser، هستهٔ اندروید، popup overlay، backdrop و fixture sanitizer.
-- رگرسیونهای جدید: VAT، جداکنندهها، متریک چهارم، تازگی بررسی دستی، تاریخچهٔ ۰→مثبت، چرخهٔ پایان فهرست، چرخش پنجره، بازیابی اتمی Store، ناشناسسازی و کلید پایدار.
-- ۱۷ تست JUnit واقعی با اجرای plain-JVM؛ تستهای Gradle/Robolectric نیز در CI اجرا میشوند.
-- ۴۰۱ رشتهٔ XML / ۴۰۲ شناسهٔ `R.string` شامل `app_version` تولیدشده توسط Gradle؛ تمام ارجاعهای `R.string` به منابع موجود حل شدند.
+- ۱۰ هارنس: parser، هستهٔ اندروید، popup overlay، backdrop، fixture sanitizer، JUnit، corpus، resource-validation، device-acceptance و UI/layout.
+- **۳۴ رگرسیون JUnit** روی plain-JVM، شامل ۴ تست ماشین حالت، ۲ تست `DiagnosticReport`، ۲ تست رضایت، ۵ تست سیاست/هزینه، ۴ تست evidence و سایر رگرسیونها.
+- `ProviderAdapter` با ۱۰ fixture ناشناسشده برای ۵ اپراتور × API 24/36 و ۱۳۲ بررسی سازگاری.
+- ۴۱۲ رشتهٔ XML؛ تمام ارجاعهای `R.string` حل شدند. ۵۰ فایل منبع XML، ۴ جدول فونت sfnt، لایهٔ `<monochrome>` و fallback چگالی API 24–25 معتبراند.
+- ماتریس پذیرش دستگاهی ۵۰ ردیفی؛ self-test از پذیرفتن ماتریس خالی، ناقص، `FAIL` یا `BLOCKED` جلوگیری میکند.
 - کنتراست سه تم: حداقل **5.15:1** و دکمههای اصلی 6.00 / 9.59 / 13.65:1.
-- ساختار Gradle، wrapper checksum، SHA اکشنها، قراردادهای UI و نبود انیمیشن دائمی بررسی شد.
+- workflow ریشه و داخل ZIP `cmp` یکساناند؛ YAML معتبر است و مرحلهٔ اعتبارسنجی منابع و امضای اختیاری Release را دارد. نخستین اجرای remote CI تفاوت `org.json` اندروید با double محلی را آشکار کرد: `JSONObject.put` و `JSONArray.getJSONObject` استثنای checked `JSONException` اعلام میکنند. stubهارنسهای JVM اکنون همان امضاها را مدل میکنند، `Evidence.java` آنها را مدیریت میکند و `check_ui.py` این همگامی را الزامی کرده است. دومین اجرا نشان داد `EvidenceTest` به double فقط-JVMـی `AccessibilityNodeInfo` وابسته است؛ این تست به `tools/junit-jvm-tests/` منتقل شد تا `testDebugUnitTest` در مقابل API واقعی اندروید کامپایل شود و قراردادی مانع بازگشت آن به `app/src/test` میشود.
 
-> **محدودیت صادقانه:** در محیط محلی SDK اندروید، اجرای واقعی Gradle، AAPT، Lint، APK، شبیهساز و اپلیکیشنهای واقعی پنج اپراتور در دسترس نبود. workflow نهایی این مراحل را روی `ubuntu-latest` اجرا میکند؛ نتیجهٔ سبز/قرمز CI و تست دستگاهی باید جداگانه مشاهده شود. تست زندهٔ Accessibility همچنان پذیرش نهایی محسوب میشود.
+> **محدودیت صادقانه:** SDK اندروید، اجرای واقعی Gradle/AAPT/Lint/APK، شبیهساز، اپلیکیشنهای واقعی پنج اپراتور، کلید امضا و حساب Play Console در سندباکس در دسترس نبود. workflow نهایی مراحل Gradle را روی `ubuntu-latest` اجرا میکند؛ نتیجهٔ remote CI، تست دستگاهی و بازبینی Play باید جداگانه مشاهده شوند. خروجی Release فعلی همچنان unsigned است.
 
 ## ۵. موارد باقیمانده / کار بعدی
 
-1. اجرای موفق `:app:lintDebug :app:testDebugUnitTest :app:assembleDebug` در GitHub Actions و سپس تست دستگاهی روی نسخههای واقعی ایرانسل، همراه اول، رایتل، سامانتل و شاتل با Android 7 و 16.
-2. ساخت corpus نسخهدار و ناشناسشدهٔ fixture برای `dump-replay` و ماتریس سازگاری ProviderAdapter.
-3. جایگزینی کامل لیست مقایسه با `RecyclerView` + diff/observer و انتقال وضعیت به `ViewModel`؛ اکنون رندر تنها هنگام تغییر واقعی انجام میشود و نتیجهٔ `Compare.run` بهاشتراک گذاشته میشود، ولی ساختار View همچنان برنامهای است.
-4. تبدیل فلگهای باقیماندهٔ `ScanService` به یک ماشین حالت انتقالمحور کامل؛ `ScanPhase` اکنون نمای نوعدار و قابل تشخیص میدهد ولی پرچمها هنوز حذف نشدهاند.
-5. اعتبارسازی AAPT/فونتها/آیکون monochrome و بررسی الزامات Play بر روی APK امضاشدهٔ Release؛ امضای Release فقط با `keystore.properties` کامل و معتبر فعال میشود.
-6. تکمیل فیلدهای evidence/confidence در `Extractor` و رابط کاربری سیاست `Op.policy` در صورتی که محصول به آن نیاز داشته باشد.
+فهرست کامل ۱۱ موردی و خطخوردگیها در `NEXT_STEPS_CHECKLIST_FA.md` است. پس از فاز تکمیلی، **۹ مورد (۱–۹) کاملاً بسته شدند** و دو مورد زیر صرفاً آمادهسازی/ممیزی شدهاند:
+
+1. **تست زندهٔ پنج اپراتور روی Android 7/16:** ابزار، قالب ۵۰ ردیفی و دستورات instrumentation آمادهاند؛ اجرای واقعی روی دستگاه باقی است.
+2. **APK امضاشده و بازبینی نهایی Play:** سیاست رسمی واکشی، افشا/رضایت و امضای اختیاری CI پیادهسازی شد؛ تأمین چهار Secret، ساخت APK امضاشده، اعلام Play Console، ویدئوی افشا و تأیید Data safety باقی است.
+
+جزئیات در `tools/device-acceptance/README_FA.md`، `RELEASE_SIGNING_FA.md` و `PLAY_POLICY_AUDIT_FA.md`.
 
 ## ۶. ساختار نهایی مخزن
 
-ریشه فقط شامل آرشیو منبع، README، workflow، ممیزی تاریخی و این گزارش است. داخل ZIP شاخهٔ `bastehyab-work/bastehyab-fix/` شامل `app/`، `gradle/`، `tools/`، `branding/`، `docs/history/`، `LICENSE`، `CHANGELOG.md` و `README.md` کامل توسعهدهندگان است. تمام اسناد قدیمی 1.2.2 تا 1.8.2 به `docs/history/` منتقل شدند و صرفاً بایگانیاند، نه مرجع نسخهٔ جاری.
+ریشه فقط شامل آرشیو منبع، README، workflow، چکلیست، نقشهٔ معماری، ممیزی Play، راهنمای امضا، ممیزی تاریخی و این گزارش است. داخل ZIP شاخهٔ `bastehyab-work/bastehyab-fix/` شامل `app/`، `gradle/`, `tools/`, `branding/`, `docs/history/`, `LICENSE`, `CHANGELOG.md`, `README.md`, `NEXT_STEPS_CHECKLIST_FA.md`, `ARCHITECTURE_FA.md`, `PLAY_POLICY_AUDIT_FA.md` و `RELEASE_SIGNING_FA.md` است. اسناد قدیمی 1.2.2 تا 1.8.2 صرفاً بایگانیاند.
+
+## ۷. فاز تکمیلی ۱۱ موردی
+
+| مرحله | موارد | نتیجه |
+|---|---|---|
+| ۰ | ساخت چکلیست | چکلیست ۱۱ موردی در ریشه و داخل ZIP |
+| ۱ | ۴ | corpus نسخهدار، `ProviderAdapter` و ماتریس ۱۰ fixture |
+| ۲ | ۵ | `Evidence`، `vatIncluded` و fingerprint ۶۴بیتی |
+| ۳ | ۶، ۷ | پاکسازی کد مرده، رابط `Op.policy` و قانون واحد VAT/هزینه |
+| ۴ | ۲ | `ScanStateMachine` و حذف ۶ پرچم volatile |
+| ۵ | ۱ | `RecyclerView`/`DiffUtil`/`ViewModel`/`LiveData` و ردیفهای قابل بازیابی |
+| ۶ | ۸، ۹ | تستهای instrumentation، اعتبارسنجی منابع و step صریح CI |
+| ۷ | ۳ | استخراج ۸ کلاس، پکیجهای `provider`/`diagnostics` و `ARCHITECTURE_FA.md` |
+| ۸ | ۱۰، ۱۱ | پروتکل دستگاهی، ممیزی رسمی Play، افشا/رضایت، امضای اختیاری CI؛ اجرای بیرونی باقی |
+
+آخرین اجرای محلی: `CHECKS_EXIT=0`، ۳۴ رگرسیون JUnit، ۱۰ fixture × ۱۳۲ بررسی، ۵۰ فایل منبع XML، ماتریس ۵۰ ردیفی و ۴۱۲ رشتهٔ حلشده. تغییرات فاز تکمیلی در شاخهٔ فعال اعمال، commit و push شد و آرشیو نهایی بازسازی شد؛ اجرای remote CI روی همان push قابل مشاهده است.
 
 </div>
