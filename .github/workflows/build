@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  SOURCE_ZIP: Bastehyab-Cyber-SoftUI-1_9_0-source.zip
+  SOURCE_ZIP: Bastehyab-Obsidian-1.8.2-source.zip
   EXTRACT_DIR: bastehyab-work/bastehyab-fix
   JAVA_VERSION: '17'
   GRADLE_VERSION: '8.13'
@@ -74,7 +74,6 @@ jobs:
           [[ -f "$EXTRACT_DIR/app/src/main/res/values/strings.xml" ]]
           [[ -f "$EXTRACT_DIR/tools/run-all-checks.sh" ]]
           echo "source=$EXTRACT_DIR" >> "$GITHUB_OUTPUT"
-
       - name: Verify Gradle wrapper and pinned action references
         shell: bash
         run: |
@@ -88,7 +87,6 @@ jobs:
           grep -q "version '8.11.1'" build.gradle
           grep -q 'compileSdk 36' app/build.gradle
           grep -q "1.9.0" app/build.gradle
-
       - name: Verify the committed public CI preview signing key
         shell: bash
         run: |
@@ -97,14 +95,12 @@ jobs:
           printf '%s  ci-preview.p12\n' "$PREVIEW_KEY_SHA256" | sha256sum -c -
           test -f ci-preview.p12
           grep -q '^storeFile=ci-preview.p12$' ci-preview.properties.example
-
       - name: Regenerate resource JVM doubles and run all plain-JVM checks
         shell: bash
         run: |
           set -euo pipefail
           cd "$EXTRACT_DIR"
           bash tools/run-all-checks.sh
-
       - name: Validate the AAPT resource graph, font tables and monochrome icon
         shell: bash
         run: |
@@ -112,7 +108,6 @@ jobs:
           cd "$EXTRACT_DIR"
           # Static pre-flight; the authoritative AAPT2 link runs in :app:assembleDebug below.
           bash tools/resource-validation/run.sh
-
       - name: Set up Android SDK 36
         uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3.2.2
         with:
@@ -130,7 +125,6 @@ jobs:
         run: |
           set -euo pipefail
           ./gradlew --no-daemon --stacktrace :app:lintDebug :app:testDebugUnitTest :app:assembleDebug
-
       - name: Build and verify an installable signed Release APK
         shell: bash
         working-directory: ${{ steps.source.outputs.source }}
@@ -163,7 +157,6 @@ jobs:
           cp -- "$apk" "release-assets/$artifact"
           ( cd release-assets && sha256sum "$artifact" > apk-sha256.txt )
           echo "Verified installable APK: release-assets/$artifact"
-
       - name: Show full Lint text report on failure
         if: failure()
         shell: bash
@@ -175,7 +168,6 @@ jobs:
           else
             echo "No lint text report was generated."
           fi
-
       - name: Upload Lint, test and Debug APK reports
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -300,7 +292,6 @@ jobs:
           set -euo pipefail
           cd "$EXTRACT_DIR"
           ./gradlew --no-daemon --stacktrace :app:assembleRelease
-
           # A Release build must produce exactly one signed APK. Gradle's default
           # app-release-unsigned.apk is rejected outright, never published.
           apk_dir=app/build/outputs/apk/release
@@ -314,7 +305,6 @@ jobs:
           case "$(basename "$apk")" in
             *unsigned*) echo "Refusing to publish an unsigned APK: $apk" >&2; exit 1 ;;
           esac
-
           apksigner="$(command -v apksigner || true)"
           if [[ -z "$apksigner" ]]; then
             sdk_root="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
@@ -323,7 +313,6 @@ jobs:
           fi
           [[ -n "$apksigner" ]] || { echo 'apksigner not found in Android build-tools' >&2; exit 1; }
           "$apksigner" verify --verbose "$apk"
-
           case "${BH_SIGNING_MODE:-}" in
             production) label='release' ; summary='the private production signing key' ;;
             preview) label='preview-sideload' ; summary='the PUBLIC CI preview / sideload key' ;;
@@ -344,7 +333,6 @@ jobs:
           ( cd release-assets && sha256sum "$artifact" > apk-sha256.txt )
           cat > release-notes.md <<EOF
           Automated release from the verified source archive ${{ github.sha }}.
-
           - APK: ${artifact} is signed, verified with apksigner and installable by sideloading.
           - Signing: ${summary} (mode ${BH_SIGNING_MODE}).
           - version-code.txt, apk-sha256.txt and signing-info.txt are attached for audit.
@@ -352,7 +340,6 @@ jobs:
           EOF
           if [[ "$BH_SIGNING_MODE" == 'preview' ]]; then
             cat >> release-notes.md <<'EOF'
-
           > WARNING: this build is signed with the PUBLIC CI preview key committed
           > to the source archive. It is for testing and manual sideloading only,
           > not for Play or any official distribution. Configure KEYSTORE_BASE64,
