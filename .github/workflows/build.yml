@@ -90,6 +90,14 @@ jobs:
           cd "$EXTRACT_DIR"
           bash tools/run-all-checks.sh
 
+      - name: Validate the AAPT resource graph, font tables and monochrome icon
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$EXTRACT_DIR"
+          # Static pre-flight; the authoritative AAPT2 link runs in :app:assembleDebug below.
+          bash tools/resource-validation/run.sh
+
       - name: Set up Android SDK 36
         uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3.2.2
         with:
@@ -133,12 +141,19 @@ jobs:
           retention-days: 14
 
   protected-release:
-    name: Unsigned release archive (protected default branch only)
+    name: Release archive (protected default branch only)
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'farshid78/probe'
     needs: verify
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    # When these four repository secrets are configured the release APK is signed;
+    # otherwise the job keeps publishing an explicitly unsigned artifact.
+    env:
+      KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+      KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+      KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+      KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
     steps:
       - name: Check out this branch
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -188,6 +203,20 @@ jobs:
                       sys.exit(f'versionCode {current} is not greater than released {previous}')
           PY
           echo "code=$code" >> "$GITHUB_OUTPUT"
+      - name: Restore release signing material when the repository provides it
+        if: env.KEYSTORE_BASE64 != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$EXTRACT_DIR"
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > release.jks
+          {
+            echo "storeFile=release.jks"
+            echo "storePassword=$KEYSTORE_PASSWORD"
+            echo "keyAlias=$KEY_ALIAS"
+            echo "keyPassword=$KEY_PASSWORD"
+          } > keystore.properties
+          chmod 600 keystore.properties release.jks
       - name: Build release APK and publish the monotonic code
         shell: bash
         env:
@@ -203,3 +232,9 @@ jobs:
             --repo "${{ github.repository }}" --title "Bastehyab ${BH_VERSION_NAME} (${BH_VERSION_CODE})" \
             --notes "Automated release from verified source archive ${{ github.sha }}." \
             app/build/outputs/apk/release/*.apk version-code.txt
+      - name: Remove signing material from the runner
+        if: always() && env.KEYSTORE_BASE64 != ''
+        shell: bash
+        run: |
+          cd "$EXTRACT_DIR"
+          rm -f release.jks keystore.properties
