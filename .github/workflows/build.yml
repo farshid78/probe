@@ -18,6 +18,9 @@ env:
   EXTRACT_DIR: bastehyab-work/bastehyab-fix
   JAVA_VERSION: '17'
   GRADLE_VERSION: '8.13'
+  # Monotonic per workflow; the protected-release job also verifies it against the
+  # previous release's version-code.txt. Avoids reusing the already-released code 1.
+  BH_VERSION_CODE: ${{ github.run_number }}
 
 jobs:
   verify:

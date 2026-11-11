@@ -11,7 +11,7 @@
 | فایل | نقش |
 |---|---|
 | `Bastehyab-Obsidian-1.8.2-source.zip` | پروژهٔ کامل اندرویدی، منابع، برند، ابزارها، تستها و مستندات |
-| [`.github/workflows/build.yml`](.github/workflows/build.yml) | تنها workflow؛ با نسخهٔ داخل ZIP یکسان است: استخراج امن، ۱۰ مجموعه تست JVM، اعتبارسنجی منابع، Lint، JUnit، APK، و انتشار محافظتشده با امضای اختیاری |
+| [`.github/workflows/build.yml`](.github/workflows/build.yml) | تنها workflow؛ با نسخهٔ داخل ZIP یکسان است: استخراج امن، ۱۰ مجموعه تست JVM، اعتبارسنجی منابع، Lint، JUnit، APK، و انتشار محافظتشده با `versionCode` افزایشی و امضای اختیاری |
 | [`PROJECT_REVIEW_FA.md`](PROJECT_REVIEW_FA.md) | ممیزی تاریخی ۸۸ یافته از نسخهٔ 1.8.2 |
 | [`FINAL_IMPLEMENTATION_REPORT_FA.md`](FINAL_IMPLEMENTATION_REPORT_FA.md) | گزارش پیادهسازی و فاز تکمیلی |
 | [`NEXT_STEPS_CHECKLIST_FA.md`](NEXT_STEPS_CHECKLIST_FA.md) | چکلیست ۱۱ موردی؛ ۹ مورد خط خورده، ۲ مورد وابسته به محیط بیرونی |
