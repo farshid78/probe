@@ -59,6 +59,9 @@ jobs:
           print('SHA256: ' + hashlib.sha256(open(name, 'rb').read()).hexdigest())
           print('Entries: ' + str(len(zipfile.ZipFile(name).namelist())))
           PY
+          # Python's ZipFile.extractall() does not restore Unix mode bits.
+          chmod +x "$EXTRACT_DIR/gradlew"
+          find "$EXTRACT_DIR/tools" -type f -name '*.sh' -exec chmod +x {} +
           [[ -f "$EXTRACT_DIR/settings.gradle" ]]
           [[ -f "$EXTRACT_DIR/gradle/wrapper/gradle-wrapper.jar" ]]
           [[ -f "$EXTRACT_DIR/app/src/main/java/app/bastehyab/ScanService.java" ]]
@@ -144,7 +147,9 @@ jobs:
         with:
           gradle-version: ${{ env.GRADLE_VERSION }}
       - name: Extract the verified source archive
-        run: unzip -q "$SOURCE_ZIP"
+        run: |
+          unzip -q "$SOURCE_ZIP"
+          chmod +x "$EXTRACT_DIR/gradlew"
       - name: Verify monotonic version code against the prior release
         id: version
         shell: bash
