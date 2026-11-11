@@ -1,1 +1,0 @@
-package android.view.accessibility; public class AccessibilityWindowInfo { public static final int TYPE_APPLICATION=1; public int getType(){return TYPE_APPLICATION;} public AccessibilityNodeInfo getRoot(){return null;} public void recycle(){} }
