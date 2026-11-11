@@ -48,7 +48,7 @@
 - ۴۱۲ رشتهٔ XML؛ تمام ارجاعهای `R.string` حل شدند. ۵۰ فایل منبع XML، ۴ جدول فونت sfnt، لایهٔ `<monochrome>` و fallback چگالی API 24–25 معتبراند.
 - ماتریس پذیرش دستگاهی ۵۰ ردیفی؛ self-test از پذیرفتن ماتریس خالی، ناقص، `FAIL` یا `BLOCKED` جلوگیری میکند.
 - کنتراست سه تم: حداقل **5.15:1** و دکمههای اصلی 6.00 / 9.59 / 13.65:1.
-- workflow ریشه و داخل ZIP `cmp` یکساناند؛ YAML معتبر است و مرحلهٔ اعتبارسنجی منابع و امضای اختیاری Release را دارد. نخستین اجرای remote CI تفاوت `org.json` اندروید با double محلی را آشکار کرد: `JSONObject.put` و `JSONArray.getJSONObject` استثنای checked `JSONException` اعلام میکنند. stubهارنسهای JVM اکنون همان امضاها را مدل میکنند، `Evidence.java` آنها را مدیریت میکند و `check_ui.py` این همگامی را الزامی کرده است.
+- workflow ریشه و داخل ZIP `cmp` یکساناند؛ YAML معتبر است و مرحلهٔ اعتبارسنجی منابع و امضای اختیاری Release را دارد. نخستین اجرای remote CI تفاوت `org.json` اندروید با double محلی را آشکار کرد: `JSONObject.put` و `JSONArray.getJSONObject` استثنای checked `JSONException` اعلام میکنند. stubهارنسهای JVM اکنون همان امضاها را مدل میکنند، `Evidence.java` آنها را مدیریت میکند و `check_ui.py` این همگامی را الزامی کرده است. دومین اجرا نشان داد `EvidenceTest` به double فقط-JVMـی `AccessibilityNodeInfo` وابسته است؛ این تست به `tools/junit-jvm-tests/` منتقل شد تا `testDebugUnitTest` در مقابل API واقعی اندروید کامپایل شود و قراردادی مانع بازگشت آن به `app/src/test` میشود.
 
 > **محدودیت صادقانه:** SDK اندروید، اجرای واقعی Gradle/AAPT/Lint/APK، شبیهساز، اپلیکیشنهای واقعی پنج اپراتور، کلید امضا و حساب Play Console در سندباکس در دسترس نبود. workflow نهایی مراحل Gradle را روی `ubuntu-latest` اجرا میکند؛ نتیجهٔ remote CI، تست دستگاهی و بازبینی Play باید جداگانه مشاهده شوند. خروجی Release فعلی همچنان unsigned است.
 
