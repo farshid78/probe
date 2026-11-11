@@ -108,6 +108,18 @@ jobs:
           set -euo pipefail
           ./gradlew --no-daemon --stacktrace :app:lintDebug :app:testDebugUnitTest :app:assembleDebug
 
+      - name: Show full Lint text report on failure
+        if: failure()
+        shell: bash
+        run: |
+          report=$(find "$EXTRACT_DIR/app/build" -name 'lint-results-debug.txt' -type f -print -quit 2>/dev/null || true)
+          if [[ -n "$report" ]]; then
+            echo "===== $report ====="
+            sed -n '1,260p' "$report"
+          else
+            echo "No lint text report was generated."
+          fi
+
       - name: Upload Lint, test and Debug APK reports
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
