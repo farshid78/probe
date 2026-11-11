@@ -21,6 +21,9 @@ env:
   # Monotonic per workflow; the protected-release job also verifies it against the
   # previous release's version-code.txt. Avoids reusing the already-released code 1.
   BH_VERSION_CODE: ${{ github.run_number }}
+  # SHA-256 of the committed PUBLIC CI preview keystore. Both jobs verify it
+  # before use, so substituted signing material cannot slip into a release.
+  PREVIEW_KEY_SHA256: 1f1bc6fbf04fefdb6e92a5879837263a74aac4b6b63e434906c0760b6b36b0b2
 
 jobs:
   verify:
@@ -86,6 +89,15 @@ jobs:
           grep -q 'compileSdk 36' app/build.gradle
           grep -q "1.9.0" app/build.gradle
 
+      - name: Verify the committed public CI preview signing key
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$EXTRACT_DIR"
+          printf '%s  ci-preview.p12\n' "$PREVIEW_KEY_SHA256" | sha256sum -c -
+          test -f ci-preview.p12
+          grep -q '^storeFile=ci-preview.p12$' ci-preview.properties.example
+
       - name: Regenerate resource JVM doubles and run all plain-JVM checks
         shell: bash
         run: |
@@ -112,12 +124,45 @@ jobs:
           gradle-version: ${{ env.GRADLE_VERSION }}
           cache-read-only: ${{ github.event_name != 'push' }}
 
-      - name: Android Lint, JVM unit tests and signed-unsigned Debug APK
+      - name: Android Lint, JVM unit tests and Debug APK
         shell: bash
         working-directory: ${{ steps.source.outputs.source }}
         run: |
           set -euo pipefail
           ./gradlew --no-daemon --stacktrace :app:lintDebug :app:testDebugUnitTest :app:assembleDebug
+
+      - name: Build and verify an installable signed Release APK
+        shell: bash
+        working-directory: ${{ steps.source.outputs.source }}
+        run: |
+          set -euo pipefail
+          trap 'rm -f keystore.properties' EXIT
+          printf '%s  ci-preview.p12\n' "$PREVIEW_KEY_SHA256" | sha256sum -c -
+          cp ci-preview.properties.example keystore.properties
+          chmod 600 keystore.properties
+          ./gradlew --no-daemon --stacktrace :app:assembleRelease
+          apk_dir=app/build/outputs/apk/release
+          mapfile -t apks < <(find "$apk_dir" -maxdepth 1 -type f -name '*.apk' | sort)
+          [[ ${#apks[@]} -eq 1 ]] || {
+            echo "Expected exactly one release APK in $apk_dir, found ${#apks[@]}" >&2; exit 1; }
+          apk="${apks[0]}"
+          case "$(basename "$apk")" in
+            *unsigned*) echo "Refusing an unsigned APK: $apk" >&2; exit 1 ;;
+          esac
+          apksigner="$(command -v apksigner || true)"
+          if [[ -z "$apksigner" ]]; then
+            sdk_root="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+            [[ -n "$sdk_root" ]] || { echo 'ANDROID_HOME is not set' >&2; exit 1; }
+            apksigner="$(find "$sdk_root/build-tools" -type f -name apksigner -print -quit)"
+          fi
+          [[ -n "$apksigner" ]] || { echo 'apksigner not found in Android build-tools' >&2; exit 1; }
+          "$apksigner" verify --verbose "$apk"
+          "$apksigner" verify --print-certs "$apk"
+          artifact="Bastehyab-1.9.0-${BH_VERSION_CODE}-preview-sideload.apk"
+          mkdir -p release-assets
+          cp -- "$apk" "release-assets/$artifact"
+          ( cd release-assets && sha256sum "$artifact" > apk-sha256.txt )
+          echo "Verified installable APK: release-assets/$artifact"
 
       - name: Show full Lint text report on failure
         if: failure()
@@ -143,6 +188,17 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+      - name: Upload the verified signed Release APK
+        if: success()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: installable-release-preview-${{ github.run_number }}
+          path: |
+            ${{ steps.source.outputs.source }}/release-assets/*.apk
+            ${{ steps.source.outputs.source }}/release-assets/apk-sha256.txt
+          if-no-files-found: error
+          retention-days: 14
+
   protected-release:
     name: Release archive (protected default branch only)
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'farshid78/probe'
@@ -150,8 +206,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    # When these four repository secrets are configured the release APK is signed;
-    # otherwise the job keeps publishing an explicitly unsigned artifact.
+    # Every published APK is signed and verified with apksigner. The four
+    # repository secrets select the private production key; when they are absent
+    # the job uses the committed PUBLIC preview key to build a clearly labelled,
+    # installable sideload APK. An unsigned APK is never a release asset.
     env:
       KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
       KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
@@ -220,7 +278,19 @@ jobs:
             echo "keyPassword=$KEY_PASSWORD"
           } > keystore.properties
           chmod 600 keystore.properties release.jks
-      - name: Build release APK and publish the monotonic code
+          echo 'BH_SIGNING_MODE=production' >> "$GITHUB_ENV"
+      - name: Enable the public CI preview signing key for sideload builds
+        if: env.KEYSTORE_BASE64 == ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$EXTRACT_DIR"
+          printf '%s  ci-preview.p12\n' "$PREVIEW_KEY_SHA256" | sha256sum -c -
+          cp ci-preview.properties.example keystore.properties
+          chmod 600 keystore.properties
+          grep -q '^storeFile=ci-preview.p12$' keystore.properties
+          echo 'BH_SIGNING_MODE=preview' >> "$GITHUB_ENV"
+      - name: Build, verify and publish a signed APK with a professional asset name
         shell: bash
         env:
           BH_VERSION_CODE: ${{ steps.version.outputs.code }}
@@ -230,13 +300,73 @@ jobs:
           set -euo pipefail
           cd "$EXTRACT_DIR"
           ./gradlew --no-daemon --stacktrace :app:assembleRelease
-          printf '%s\n' "$BH_VERSION_CODE" > version-code.txt
+
+          # A Release build must produce exactly one signed APK. Gradle's default
+          # app-release-unsigned.apk is rejected outright, never published.
+          apk_dir=app/build/outputs/apk/release
+          mapfile -t apks < <(find "$apk_dir" -maxdepth 1 -type f -name '*.apk' | sort)
+          if [[ ${#apks[@]} -ne 1 ]]; then
+            echo "Expected exactly one release APK in $apk_dir, found ${#apks[@]}:" >&2
+            printf '  %s\n' "${apks[@]}" >&2
+            exit 1
+          fi
+          apk="${apks[0]}"
+          case "$(basename "$apk")" in
+            *unsigned*) echo "Refusing to publish an unsigned APK: $apk" >&2; exit 1 ;;
+          esac
+
+          apksigner="$(command -v apksigner || true)"
+          if [[ -z "$apksigner" ]]; then
+            sdk_root="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+            [[ -n "$sdk_root" ]] || { echo 'ANDROID_HOME is not set' >&2; exit 1; }
+            apksigner="$(find "$sdk_root/build-tools" -type f -name apksigner -print -quit)"
+          fi
+          [[ -n "$apksigner" ]] || { echo 'apksigner not found in Android build-tools' >&2; exit 1; }
+          "$apksigner" verify --verbose "$apk"
+
+          case "${BH_SIGNING_MODE:-}" in
+            production) label='release' ; summary='the private production signing key' ;;
+            preview) label='preview-sideload' ; summary='the PUBLIC CI preview / sideload key' ;;
+            *) echo 'BH_SIGNING_MODE was not selected by a signing step' >&2; exit 1 ;;
+          esac
+          artifact="Bastehyab-${BH_VERSION_NAME}-${BH_VERSION_CODE}-${label}.apk"
+          mkdir -p release-assets
+          cp -- "$apk" "release-assets/$artifact"
+          printf '%s\n' "$BH_VERSION_CODE" > release-assets/version-code.txt
+          {
+            echo "Bastehyab ${BH_VERSION_NAME} (${BH_VERSION_CODE})"
+            echo "source commit: ${{ github.sha }}"
+            echo "signing mode: ${BH_SIGNING_MODE} (${summary})"
+            echo "signature verification: apksigner verify --verbose (passed)"
+            echo
+            "$apksigner" verify --print-certs "$apk"
+          } > release-assets/signing-info.txt
+          ( cd release-assets && sha256sum "$artifact" > apk-sha256.txt )
+          cat > release-notes.md <<EOF
+          Automated release from the verified source archive ${{ github.sha }}.
+
+          - APK: ${artifact} is signed, verified with apksigner and installable by sideloading.
+          - Signing: ${summary} (mode ${BH_SIGNING_MODE}).
+          - version-code.txt, apk-sha256.txt and signing-info.txt are attached for audit.
+          - No unsigned APK is published by this workflow.
+          EOF
+          if [[ "$BH_SIGNING_MODE" == 'preview' ]]; then
+            cat >> release-notes.md <<'EOF'
+
+          > WARNING: this build is signed with the PUBLIC CI preview key committed
+          > to the source archive. It is for testing and manual sideloading only,
+          > not for Play or any official distribution. Configure KEYSTORE_BASE64,
+          > KEYSTORE_PASSWORD, KEY_ALIAS and KEY_PASSWORD to publish a release
+          > signed with your private production key.
+          EOF
+          fi
           gh release create "v${BH_VERSION_NAME}-${BH_VERSION_CODE}" \
             --repo "${{ github.repository }}" --title "Bastehyab ${BH_VERSION_NAME} (${BH_VERSION_CODE})" \
-            --notes "Automated release from verified source archive ${{ github.sha }}." \
-            app/build/outputs/apk/release/*.apk version-code.txt
+            --notes-file release-notes.md \
+            release-assets/"$artifact" release-assets/version-code.txt \
+            release-assets/apk-sha256.txt release-assets/signing-info.txt
       - name: Remove signing material from the runner
-        if: always() && env.KEYSTORE_BASE64 != ''
+        if: always()
         shell: bash
         run: |
           cd "$EXTRACT_DIR"
