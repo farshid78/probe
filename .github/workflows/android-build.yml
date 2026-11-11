@@ -6,7 +6,6 @@ on:
       - '**'
   workflow_dispatch:
 
-# Default permissions are read-only. Only the isolated release job can write releases.
 permissions:
   contents: read
 
@@ -16,14 +15,40 @@ concurrency:
 
 jobs:
   build-test:
-    name: Static checks, unit tests and Debug build
+    name: Extract source, static checks, unit tests and Debug build
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
       contents: read
     steps:
-      - name: Checkout source
+      - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Find and extract the source archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t zips < <(git ls-files '*.zip')
+          if [ "${#zips[@]}" -ne 1 ]; then
+            echo "::error::Expected exactly one committed .zip archive, found ${#zips[@]}: ${zips[*]:-none}"
+            exit 1
+          fi
+          SRC="$RUNNER_TEMP/src"
+          rm -rf "$SRC"
+          mkdir -p "$SRC"
+          unzip -q "${zips[0]}" -d "$SRC"
+          mapfile -t settings < <(find "$SRC" -name settings.gradle -not -path '*/__MACOSX/*')
+          if [ "${#settings[@]}" -ne 1 ]; then
+            echo "::error::Expected exactly one settings.gradle in the archive, found ${#settings[@]}"
+            exit 1
+          fi
+          PROJECT_DIR="$(dirname "${settings[0]}")"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Archive: ${zips[0]}"
+          echo "Project directory: $PROJECT_DIR"
+          test -f "$PROJECT_DIR/build.gradle"
+          test -f "$PROJECT_DIR/app/build.gradle"
+          test -f "$PROJECT_DIR/app/src/main/AndroidManifest.xml"
 
       - name: Setup Java 17
         uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
@@ -44,18 +69,17 @@ jobs:
             "platforms;android-34" \
             "build-tools;34.0.0"
 
-      # The repository does not yet contain a complete Gradle Wrapper (the wrapper JAR
-      # is intentionally not fabricated when its official binary cannot be obtained).
       - name: Setup Gradle 8.7
         uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
         with:
           gradle-version: '8.7'
           cache-provider: basic
 
-      - name: Verify project and compute monotonic version code
+      - name: Verify project and compute versionCode
         shell: bash
         run: |
           set -euo pipefail
+          cd "$PROJECT_DIR"
           java -version
           gradle --version
           grep -q "com.android.application.*8.5.2" build.gradle
@@ -73,6 +97,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          cd "$PROJECT_DIR"
           bash tools/fixture-sanitizer/test.sh
           bash tools/parser-smoke-tests/run.sh
           bash tools/android-core-smoke-tests/run.sh
@@ -83,6 +108,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          cd "$PROJECT_DIR"
           gradle --no-daemon --stacktrace \
             :app:lintDebug \
             :app:testDebugUnitTest \
@@ -92,14 +118,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          APK="$(find app/build/outputs/apk/debug -type f -name '*.apk' -print -quit)"
+          APK="$(find "$PROJECT_DIR/app/build/outputs/apk/debug" -type f -name '*.apk' -print -quit)"
           if [ -z "$APK" ]; then
             echo "::error::Debug APK was not generated."
             exit 1
           fi
-          mkdir -p dist
-          cp "$APK" dist/Bastehyab-Debug.apk
-          sha256sum dist/Bastehyab-Debug.apk > dist/Bastehyab-Debug-SHA256.txt
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          cp "$APK" "$GITHUB_WORKSPACE/dist/Bastehyab-Debug.apk"
+          sha256sum "$GITHUB_WORKSPACE/dist/Bastehyab-Debug.apk" > "$GITHUB_WORKSPACE/dist/Bastehyab-Debug-SHA256.txt"
 
       - name: Upload Debug artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -111,18 +137,6 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: CI summary
-        if: always()
-        shell: bash
-        run: |
-          {
-            echo "## Bastehyab CI"
-            echo "- Run: ${GITHUB_RUN_NUMBER} / attempt ${GITHUB_RUN_ATTEMPT}"
-            echo "- versionCode: ${BH_VERSION_CODE:-not-computed}"
-            echo "- Android Lint + local unit test task + Debug build are required."
-            echo "- Instrumentation/emulator tests remain pending until device-level test fixtures are added."
-          } >> "$GITHUB_STEP_SUMMARY"
-
   release:
     name: Signed Release (protected main only)
     if: github.ref == 'refs/heads/main'
@@ -132,10 +146,32 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Checkout source
+      - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
+
+      - name: Find and extract the source archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t zips < <(git ls-files '*.zip')
+          if [ "${#zips[@]}" -ne 1 ]; then
+            echo "::error::Expected exactly one committed .zip archive, found ${#zips[@]}: ${zips[*]:-none}"
+            exit 1
+          fi
+          SRC="$RUNNER_TEMP/src"
+          rm -rf "$SRC"
+          mkdir -p "$SRC"
+          unzip -q "${zips[0]}" -d "$SRC"
+          mapfile -t settings < <(find "$SRC" -name settings.gradle -not -path '*/__MACOSX/*')
+          if [ "${#settings[@]}" -ne 1 ]; then
+            echo "::error::Expected exactly one settings.gradle in the archive, found ${#settings[@]}"
+            exit 1
+          fi
+          PROJECT_DIR="$(dirname "${settings[0]}")"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Project directory: $PROJECT_DIR"
 
       - name: Setup Java 17
         uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
@@ -198,8 +234,7 @@ jobs:
             echo "::error::Could not retrieve the latest published APK to validate versionCode."
             exit 1
           fi
-          PREVIOUS_APK="$PREVIOUS_DIR/Bastehyab-Release.apk"
-          PREVIOUS_CODE="$(aapt dump badging "$PREVIOUS_APK" | sed -n "s/.*versionCode='\([0-9][0-9]*\)'.*/\1/p" | head -n 1)"
+          PREVIOUS_CODE="$(aapt dump badging "$PREVIOUS_DIR/Bastehyab-Release.apk" | sed -n "s/.*versionCode='\([0-9][0-9]*\)'.*/\1/p" | head -n 1)"
           if [ -z "$PREVIOUS_CODE" ]; then
             echo "::error::Could not read previous Release versionCode."
             exit 1
@@ -210,7 +245,6 @@ jobs:
           fi
           echo "Published code $PREVIOUS_CODE -> candidate $BH_VERSION_CODE" >> "$GITHUB_STEP_SUMMARY"
 
-      # Signing secrets are never available to the build/test job.
       - name: Validate signing secrets
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -230,7 +264,6 @@ jobs:
           fi
 
       - name: Prepare temporary signing properties
-        working-directory: ${{ github.workspace }}
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
@@ -268,13 +301,15 @@ jobs:
               "keyAlias": os.environ["KEY_ALIAS"],
               "keyPassword": os.environ["KEY_PASSWORD"],
           }
-          Path("keystore.properties").write_bytes(("\n".join(f"{k}={esc(v)}" for k,v in values.items())+"\n").encode("ascii"))
+          target = Path(os.environ["PROJECT_DIR"], "keystore.properties")
+          target.write_bytes(("\n".join(f"{k}={esc(v)}" for k,v in values.items())+"\n").encode("ascii"))
           PY
 
       - name: Build signed Release APK
         shell: bash
         run: |
           set -euo pipefail
+          cd "$PROJECT_DIR"
           test -s keystore.properties
           gradle --no-daemon --stacktrace clean :app:assembleRelease
           APK="$(find app/build/outputs/apk/release -type f -name '*.apk' -print -quit)"
@@ -282,8 +317,8 @@ jobs:
             echo "::error::Release APK was not generated."
             exit 1
           fi
-          mkdir -p dist
-          cp "$APK" dist/Bastehyab-Release.apk
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          cp "$APK" "$GITHUB_WORKSPACE/dist/Bastehyab-Release.apk"
 
       - name: Verify signed Release APK and publish
         env:
@@ -304,4 +339,29 @@ jobs:
           grep -q "name='app.bastehyab'" "$RUNNER_TEMP/bastehyab-badging.txt"
           grep -q "versionCode='$BH_VERSION_CODE'" "$RUNNER_TEMP/bastehyab-badging.txt"
           sha256sum "$APK" > "$GITHUB_WORKSPACE/dist/SHA256.txt"
-          TAG="bastehy
+          TAG="bastehyab-build-${GITHUB_RUN_NUMBER}"
+          NOTES="$RUNNER_TEMP/release-notes.md"
+          cat > "$NOTES" <<NOTES
+          نسخهٔ Release بسته‌یاب 1.9.0
+
+          - versionCode: $BH_VERSION_CODE
+          - Android minSdk: 24
+          - APK با کلید انتشار پروژه امضا و با apksigner بررسی شده است.
+          - خروجی Debug برای نصب به‌عنوان به‌روزرسانی Release مناسب نیست.
+          NOTES
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$APK" "$GITHUB_WORKSPACE/dist/SHA256.txt" --clobber
+            gh release edit "$TAG" --title "Bastehyab 1.9.0 build ${GITHUB_RUN_NUMBER}" --notes-file "$NOTES"
+          else
+            gh release create "$TAG" "$APK" "$GITHUB_WORKSPACE/dist/SHA256.txt" \
+              --title "Bastehyab 1.9.0 build ${GITHUB_RUN_NUMBER}" \
+              --notes-file "$NOTES"
+          fi
+
+      - name: Remove temporary signing material
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          if [ -n "${PROJECT_DIR:-}" ]; then rm -f "$PROJECT_DIR/keystore.properties"; fi
+          rm -f "$RUNNER_TEMP/bastehyab-release.jks"
