@@ -33,7 +33,7 @@ jobs:
             echo "::error::Expected exactly one committed .zip archive, found ${#zips[@]}: ${zips[*]:-none}"
             exit 1
           fi
-          SRC="$RUNNER_TEMP/src"
+                    SRC="$GITHUB_WORKSPACE/_src""
           rm -rf "$SRC"
           mkdir -p "$SRC"
           unzip -q "${zips[0]}" -d "$SRC"
