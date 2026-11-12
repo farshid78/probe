@@ -123,12 +123,23 @@ jobs:
           echo "$SDK_ROOT/emulator" >> "$GITHUB_PATH"
           echo "$SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
           echo "$SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          # Android Emulator ships its own shared libraries inside the SDK.
+          # Discover every directory containing shared objects and expose them
+          # both to this step and to all following workflow steps.
+          EMULATOR_LIB_DIRS="$(find -L "$SDK_ROOT/emulator" -type f \
+            \( -name '*.so' -o -name '*.so.*' \) -printf '%h\n' 2>/dev/null | sort -u | paste -sd: -)"
+          export LD_LIBRARY_PATH="$SDK_ROOT/emulator:$SDK_ROOT/emulator/lib64:$SDK_ROOT/emulator/lib64/qt/lib:$SDK_ROOT/emulator/qemu/linux-x86_64${EMULATOR_LIB_DIRS:+:$EMULATOR_LIB_DIRS}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
+          echo "Android Emulator library directories: $EMULATOR_LIB_DIRS"
+
           QEMU="$(find -L "$SDK_ROOT/emulator" -name 'qemu-system-x86_64' -print -quit 2>/dev/null || true)"
           if [[ -n "$QEMU" ]]; then
             echo "Found QEMU: $QEMU"
             ldd "$QEMU" | tee "$RUNNER_TEMP/emulator-qemu-ldd.txt"
             if grep -q 'not found' "$RUNNER_TEMP/emulator-qemu-ldd.txt"; then
-              echo "::error::QEMU has unresolved shared-library dependencies."
+              echo "::error::QEMU still has unresolved shared-library dependencies after adding the SDK library paths."
+              echo "SDK emulator library files (first 150):"
+              find -L "$SDK_ROOT/emulator" -type f \( -name '*.so' -o -name '*.so.*' \) -print | head -n 150 || true
               exit 1
             fi
           else
@@ -227,7 +238,7 @@ jobs:
           adb logcat -d -s BastehyabBackdropPerf:I > "$RUNNER_TEMP/bastehyab-backdrop-performance.log"
           if [[ -s "$RUNNER_TEMP/bastehyab-backdrop-performance.log" ]]; then
             cat "$RUNNER_TEMP/bastehyab-backdrop-performance.log"
-            {
+                    {
               echo "## Android 16 backdrop FPS / CPU measurements"
               cat "$RUNNER_TEMP/bastehyab-backdrop-performance.log"
             } >> "$GITHUB_STEP_SUMMARY"
@@ -362,12 +373,23 @@ jobs:
           echo "$SDK_ROOT/emulator" >> "$GITHUB_PATH"
           echo "$SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
           echo "$SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          # Android Emulator ships its own shared libraries inside the SDK.
+          # Discover every directory containing shared objects and expose them
+          # both to this step and to all following workflow steps.
+          EMULATOR_LIB_DIRS="$(find -L "$SDK_ROOT/emulator" -type f \
+            \( -name '*.so' -o -name '*.so.*' \) -printf '%h\n' 2>/dev/null | sort -u | paste -sd: -)"
+          export LD_LIBRARY_PATH="$SDK_ROOT/emulator:$SDK_ROOT/emulator/lib64:$SDK_ROOT/emulator/lib64/qt/lib:$SDK_ROOT/emulator/qemu/linux-x86_64${EMULATOR_LIB_DIRS:+:$EMULATOR_LIB_DIRS}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
+          echo "Android Emulator library directories: $EMULATOR_LIB_DIRS"
+
           QEMU="$(find -L "$SDK_ROOT/emulator" -name 'qemu-system-x86_64' -print -quit 2>/dev/null || true)"
           if [[ -n "$QEMU" ]]; then
             echo "Found QEMU: $QEMU"
             ldd "$QEMU" | tee "$RUNNER_TEMP/emulator-qemu-ldd.txt"
             if grep -q 'not found' "$RUNNER_TEMP/emulator-qemu-ldd.txt"; then
-              echo "::error::QEMU has unresolved shared-library dependencies."
+              echo "::error::QEMU still has unresolved shared-library dependencies after adding the SDK library paths."
+              echo "SDK emulator library files (first 150):"
+              find -L "$SDK_ROOT/emulator" -type f \( -name '*.so' -o -name '*.so.*' \) -print | head -n 150 || true
               exit 1
             fi
           else
@@ -413,7 +435,7 @@ jobs:
             echo "::error::No previous version is available for upgrade testing. Import the original upload-signed published APK and set PUBLISHED_BASELINE_RELEASE_TAG."
             exit 1
           fi
-          if [[ -n "${PUBLISHED_BASELINE_RELEASE_TAG:-}" ]]; then
+              if [[ -n "${PUBLISHED_BASELINE_RELEASE_TAG:-}" ]]; then
             mkdir -p "$RUNNER_TEMP/published-baseline"
             gh release download "$PUBLISHED_BASELINE_RELEASE_TAG" \
               --pattern 'Bastehyab-Published-Baseline.apk' --dir "$RUNNER_TEMP/published-baseline"
@@ -577,8 +599,7 @@ jobs:
             exit 1
           fi
           echo "Previous release $PREVIOUS_TAG code $PREVIOUS_CODE and signing certificate match." >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Install and upgrade-test on Android 16 emulator
+                - name: Install and upgrade-test on Android 16 emulator
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
