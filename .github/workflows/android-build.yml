@@ -4,51 +4,32 @@ on:
   push:
     branches:
       - '**'
+    tags:
+      - 'v*'
   workflow_dispatch:
+    inputs:
+      release_version:
+        description: 'Canonical VERSION_NAME to release (must match version.properties)'
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
   group: bastehyab-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   build-test:
-    name: Extract source, static checks, unit tests and Debug build
+    name: Static checks, lint, unit tests and Debug build
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     permissions:
       contents: read
     steps:
-      - name: Checkout repository
+      - name: Checkout source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Find and extract the source archive
-        shell: bash
-        run: |
-          set -euo pipefail
-          mapfile -t zips < <(git ls-files '*.zip')
-          if [ "${#zips[@]}" -ne 1 ]; then
-            echo "::error::Expected exactly one committed .zip archive, found ${#zips[@]}"
-            exit 1
-          fi
-          SRC="$GITHUB_WORKSPACE/_src"
-          rm -rf "$SRC"
-          mkdir -p "$SRC"
-          unzip -q "${zips[0]}" -d "$SRC"
-          mapfile -t settings < <(find "$SRC" -name settings.gradle -not -path '*/__MACOSX/*')
-          if [ "${#settings[@]}" -ne 1 ]; then
-            echo "::error::Expected exactly one settings.gradle in the archive, found ${#settings[@]}"
-            exit 1
-          fi
-          PROJECT_DIR="$(dirname "${settings[0]}")"
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Archive: ${zips[0]}"
-          echo "Project directory: $PROJECT_DIR"
-          test -f "$PROJECT_DIR/build.gradle"
-          test -f "$PROJECT_DIR/app/build.gradle"
-          test -f "$PROJECT_DIR/app/src/main/AndroidManifest.xml"
 
       - name: Setup Java 17
         uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
@@ -56,122 +37,186 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Android SDK
+      - name: Setup Gradle 8.13 bootstrap distribution
+        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+        with:
+          gradle-version: '8.13'
+          cache-provider: basic
+
+      - name: Generate and verify official Gradle Wrapper
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/release/bootstrap-wrapper.sh
+
+      - name: Export wrapper bootstrap artifact for repository commit
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bastehyab-gradle-wrapper-8.13
+          path: |
+            gradlew
+            gradlew.bat
+            gradle/wrapper/gradle-wrapper.jar
+            gradle/wrapper/gradle-wrapper.jar.sha256
+            gradle/wrapper/gradle-wrapper.properties
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Setup Android SDK 36
         uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
 
-      - name: Install project Android SDK packages
+      - name: Install Android 16 SDK and emulator
         shell: bash
         run: |
           set -euo pipefail
           yes | sdkmanager --licenses >/dev/null || true
           sdkmanager --install \
             "platform-tools" \
-            "platforms;android-34" \
-            "build-tools;34.0.0"
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
+            "emulator" \
+            "system-images;android-36;google_apis;x86_64"
 
-      - name: Setup Gradle 8.7
-        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
-        with:
-          gradle-version: '8.7'
-          cache-provider: basic
-
-      - name: Verify project and compute versionCode
+      - name: Validate canonical version and release trigger
+        id: version
+        env:
+          RELEASE_VERSION_INPUT: ${{ inputs.release_version }}
         shell: bash
         run: |
           set -euo pipefail
-          cd "$PROJECT_DIR"
-          java -version
-          gradle --version
-          grep -q "com.android.application.*8.5.2" build.gradle
-          grep -q "compileSdk 34" app/build.gradle
-          grep -q "applicationId 'app.bastehyab'" app/build.gradle
-          VERSION_CODE=$((1000000000 + GITHUB_RUN_NUMBER * 100 + GITHUB_RUN_ATTEMPT))
-          if [ "$VERSION_CODE" -gt 2100000000 ]; then
-            echo "::error::Computed Android versionCode exceeds the supported ceiling."
+          python3 tools/release/validate-release-metadata.py
+          VERSION_NAME="$(sed -n 's/^VERSION_NAME=//p' version.properties)"
+          VERSION_CODE="$(sed -n 's/^VERSION_CODE=//p' version.properties)"
+          if [[ "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_REF" == refs/tags/* ]]; then
+            python3 tools/release/validate-release-metadata.py "$GITHUB_REF_NAME"
+          elif [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+              echo "::error::Manual releases may only be dispatched from main."
+              exit 1
+            fi
+            if [[ "$RELEASE_VERSION_INPUT" != "$VERSION_NAME" ]]; then
+              echo "::error::Manual release input must equal canonical VERSION_NAME ($VERSION_NAME)."
+              exit 1
+            fi
+          fi
+          if (( VERSION_CODE > 2100000000 || VERSION_CODE < 1 )); then
+            echo "::error::VERSION_CODE is outside Android's supported range."
             exit 1
           fi
-          echo "BH_VERSION_CODE=$VERSION_CODE" >> "$GITHUB_ENV"
-          echo "Build versionCode: $VERSION_CODE"
+          echo "version_name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
+          echo "version_code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
 
       - name: Run project smoke tests
         shell: bash
         run: |
           set -euo pipefail
-          cd "$PROJECT_DIR"
           bash tools/fixture-sanitizer/test.sh
           bash tools/parser-smoke-tests/run.sh
           bash tools/android-core-smoke-tests/run.sh
           bash tools/popup-overlay-smoke-tests/run.sh
           bash tools/ui-layout-smoke-tests/run.sh
+          bash tools/android-core-smoke-tests/check-accessibility-api.sh
+          python3 tools/backdrop-instrumentation-tests/static-review.py
+          python3 tools/release/validate-release-metadata.py
 
       - name: Android Lint, unit tests and Debug APK
         shell: bash
         run: |
           set -euo pipefail
-          cd "$PROJECT_DIR"
-          gradle --no-daemon --stacktrace \
+          ./gradlew --no-daemon --stacktrace \
             :app:lintDebug \
             :app:testDebugUnitTest \
             :app:assembleDebug
 
-      - name: Collect Debug APK
+      - name: Run Android 16 instrumentation suite
         shell: bash
         run: |
           set -euo pipefail
-          APK="$(find "$PROJECT_DIR/app/build/outputs/apk/debug" -type f -name '*.apk' -print -quit)"
-          if [ -z "$APK" ]; then
-            echo "::error::Debug APK was not generated."
+          echo "no" | avdmanager create avd --force --name bastehyab-api36 \
+            --package "system-images;android-36;google_apis;x86_64" --device "pixel_2"
+          emulator -avd bastehyab-api36 -no-window -no-audio -no-boot-anim \
+            -no-snapshot -wipe-data -gpu swiftshader_indirect -memory 2048 \
+            > "$RUNNER_TEMP/bastehyab-emulator.log" 2>&1 &
+          EMULATOR_PID=$!
+          cleanup_emulator() {
+            adb emu kill >/dev/null 2>&1 || true
+            kill "$EMULATOR_PID" >/dev/null 2>&1 || true
+          }
+          trap cleanup_emulator EXIT
+          adb wait-for-device
+          booted=0
+          for attempt in $(seq 1 180); do
+            state="$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')"
+            if [[ "$state" == "1" ]]; then booted=1; break; fi
+            sleep 2
+          done
+          if [[ "$booted" -ne 1 ]]; then
+            echo "::error::Android 16 emulator did not finish booting."
+            tail -n 120 "$RUNNER_TEMP/bastehyab-emulator.log" || true
             exit 1
           fi
-          mkdir -p "$GITHUB_WORKSPACE/dist"
-          cp "$APK" "$GITHUB_WORKSPACE/dist/Bastehyab-Debug.apk"
-          sha256sum "$GITHUB_WORKSPACE/dist/Bastehyab-Debug.apk" > "$GITHUB_WORKSPACE/dist/Bastehyab-Debug-SHA256.txt"
+          adb logcat -c
+          ./gradlew --no-daemon --stacktrace :app:connectedDebugAndroidTest
+          adb logcat -d -s BastehyabBackdropPerf:I > "$RUNNER_TEMP/bastehyab-backdrop-performance.log"
+          if [[ -s "$RUNNER_TEMP/bastehyab-backdrop-performance.log" ]]; then
+            cat "$RUNNER_TEMP/bastehyab-backdrop-performance.log"
+            {
+              echo "## Android 16 backdrop FPS / CPU measurements"
+              cat "$RUNNER_TEMP/bastehyab-backdrop-performance.log"
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::No BastehyabBackdropPerf measurements were emitted."
+          fi
+
+      - name: Collect Debug APK and checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="$(find app/build/outputs/apk/debug -type f -name '*.apk' -print -quit)"
+          test -n "$APK"
+          mkdir -p dist
+          cp "$APK" dist/Bastehyab-Debug.apk
+          sha256sum dist/Bastehyab-Debug.apk > dist/Bastehyab-Debug-SHA256.txt
 
       - name: Upload Debug artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: bastehyab-debug-${{ github.run_number }}-${{ github.run_attempt }}
+          name: bastehyab-debug-${{ steps.version.outputs.version_name }}-${{ github.run_id }}
           path: |
             dist/Bastehyab-Debug.apk
             dist/Bastehyab-Debug-SHA256.txt
           if-no-files-found: error
           retention-days: 14
 
+      - name: CI summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Bastehyab CI"
+            echo "- Canonical version: ${VERSION_NAME:-$(sed -n 's/^VERSION_NAME=//p' version.properties)}"
+            echo "- Canonical versionCode: ${VERSION_CODE:-$(sed -n 's/^VERSION_CODE=//p' version.properties)}"
+            echo "- compileSdk / targetSdk: 36 / 36"
+            echo "- Android 16 instrumentation step: inspect its result above."
+          } >> "$GITHUB_STEP_SUMMARY"
+
   release:
-    name: Signed Release (protected main only)
-    if: github.ref == 'refs/heads/main'
+    name: Approved signed release
+    if: >-
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
     needs: build-test
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
+    environment:
+      name: release
     permissions:
       contents: write
     steps:
-      - name: Checkout repository
+      - name: Checkout source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
-
-      - name: Find and extract the source archive
-        shell: bash
-        run: |
-          set -euo pipefail
-          mapfile -t zips < <(git ls-files '*.zip')
-          if [ "${#zips[@]}" -ne 1 ]; then
-            echo "::error::Expected exactly one committed .zip archive, found ${#zips[@]}"
-            exit 1
-          fi
-          SRC="$GITHUB_WORKSPACE/_src"
-          rm -rf "$SRC"
-          mkdir -p "$SRC"
-          unzip -q "${zips[0]}" -d "$SRC"
-          mapfile -t settings < <(find "$SRC" -name settings.gradle -not -path '*/__MACOSX/*')
-          if [ "${#settings[@]}" -ne 1 ]; then
-            echo "::error::Expected exactly one settings.gradle in the archive, found ${#settings[@]}"
-            exit 1
-          fi
-          PROJECT_DIR="$(dirname "${settings[0]}")"
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Project directory: $PROJECT_DIR"
 
       - name: Setup Java 17
         uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
@@ -179,70 +224,102 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Android SDK
+      - name: Setup Gradle 8.13 bootstrap distribution
+        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+        with:
+          gradle-version: '8.13'
+          cache-provider: basic
+
+      - name: Generate and verify official Gradle Wrapper
+        shell: bash
+        run: bash tools/release/bootstrap-wrapper.sh
+
+      - name: Setup Android SDK 36
         uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
 
-      - name: Install project Android SDK packages
+      - name: Install Android 16 build and upgrade-test tools
         shell: bash
         run: |
           set -euo pipefail
           yes | sdkmanager --licenses >/dev/null || true
           sdkmanager --install \
             "platform-tools" \
-            "platforms;android-34" \
-            "build-tools;34.0.0"
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
+            "emulator" \
+            "system-images;android-36;google_apis;x86_64"
 
-      - name: Setup Gradle 8.7
-        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
-        with:
-          gradle-version: '8.7'
-          cache-provider: basic
-
-      - name: Compute release versionCode
-        shell: bash
-        run: |
-          set -euo pipefail
-          VERSION_CODE=$((1000000000 + GITHUB_RUN_NUMBER * 100 + GITHUB_RUN_ATTEMPT))
-          if [ "$VERSION_CODE" -gt 2100000000 ]; then
-            echo "::error::Computed Android versionCode exceeds the supported ceiling."
-            exit 1
-          fi
-          echo "BH_VERSION_CODE=$VERSION_CODE" >> "$GITHUB_ENV"
-          echo "Release versionCode: $VERSION_CODE"
-
-      - name: Validate versionCode against earlier releases
+      - name: Validate version, imported published baseline and prior release
+        id: release-meta
         env:
+          RELEASE_VERSION_INPUT: ${{ inputs.release_version }}
+          PUBLISHED_VERSION_CODE_BASELINE: ${{ vars.PUBLISHED_VERSION_CODE_BASELINE }}
+          PUBLISHED_BASELINE_RELEASE_TAG: ${{ vars.PUBLISHED_BASELINE_RELEASE_TAG }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
-          prev_dir="$RUNNER_TEMP/previous-release"
-          mkdir -p "$prev_dir"
-          found=""
-          for tag in $(gh release list --repo "$GITHUB_REPOSITORY" --limit 50 --json tagName --jq '.[].tagName'); do
-            if gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern 'Bastehyab-Release.apk' --dir "$prev_dir" --clobber >/dev/null 2>&1; then
-              found="$tag"
-              break
+          python3 tools/release/validate-release-metadata.py
+          VERSION_NAME="$(sed -n 's/^VERSION_NAME=//p' version.properties)"
+          VERSION_CODE="$(sed -n 's/^VERSION_CODE=//p' version.properties)"
+          TAG="v$VERSION_NAME"
+          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+            python3 tools/release/validate-release-metadata.py "$GITHUB_REF_NAME"
+            TAG="$GITHUB_REF_NAME"
+          else
+            if [[ "$RELEASE_VERSION_INPUT" != "$VERSION_NAME" || "$GITHUB_REF" != "refs/heads/main" ]]; then
+              echo "::error::Manual release must run from main and match VERSION_NAME."
+              exit 1
             fi
-          done
-          if [ -z "$found" ]; then
-            echo "::warning::No earlier release contains Bastehyab-Release.apk; versionCode comparison skipped."
-            echo "Versioncode comparison skipped (no earlier APK asset found)." >> "$GITHUB_STEP_SUMMARY"
-            exit 0
           fi
-          aapt_bin="${ANDROID_HOME}/build-tools/34.0.0/aapt"
-          prev_code="$("$aapt_bin" dump badging "$prev_dir/Bastehyab-Release.apk" | grep -o "versionCode='[0-9]*'" | head -n 1 | grep -o '[0-9]*')"
-          if [ -z "$prev_code" ]; then
-            echo "::error::Could not read versionCode from $found."
+          if [[ -z "${PUBLISHED_VERSION_CODE_BASELINE:-}" || ! "$PUBLISHED_VERSION_CODE_BASELINE" =~ ^[0-9]+$ ]]; then
+            echo "::error::Set repository variable PUBLISHED_VERSION_CODE_BASELINE to the largest published versionCode across Google Play and external stores."
             exit 1
           fi
-          if [ "$BH_VERSION_CODE" -le "$prev_code" ]; then
-            echo "::error::New versionCode ($BH_VERSION_CODE) must exceed published ($prev_code) from $found."
+          if (( VERSION_CODE <= PUBLISHED_VERSION_CODE_BASELINE )); then
+            echo "::error::Candidate versionCode $VERSION_CODE must exceed imported published baseline $PUBLISHED_VERSION_CODE_BASELINE."
             exit 1
           fi
-          echo "Published code $prev_code ($found) -> candidate $BH_VERSION_CODE" >> "$GITHUB_STEP_SUMMARY"
+          PREVIOUS_GITHUB_TAG="$(gh release list --limit 100 --json tagName,isDraft,isPrerelease \
+            --jq '[.[] | select(.isDraft == false and .isPrerelease == false and (.tagName | startswith("v")))][0].tagName // ""')"
+          if [[ -z "$PREVIOUS_GITHUB_TAG" && -z "${PUBLISHED_BASELINE_RELEASE_TAG:-}" ]]; then
+            echo "::error::No previous version is available for upgrade testing. Import the original upload-signed published APK and set PUBLISHED_BASELINE_RELEASE_TAG."
+            exit 1
+          fi
+          if [[ -n "${PUBLISHED_BASELINE_RELEASE_TAG:-}" ]]; then
+            mkdir -p "$RUNNER_TEMP/published-baseline"
+            gh release download "$PUBLISHED_BASELINE_RELEASE_TAG" \
+              --pattern 'Bastehyab-Published-Baseline.apk' --dir "$RUNNER_TEMP/published-baseline"
+            BASELINE_APK="$RUNNER_TEMP/published-baseline/Bastehyab-Published-Baseline.apk"
+            BUILD_TOOLS="${ANDROID_HOME:-${ANDROID_SDK_ROOT}}/build-tools/36.0.0"
+            "$BUILD_TOOLS/aapt" dump badging "$BASELINE_APK" > "$RUNNER_TEMP/published-baseline-badging.txt"
+            grep -Fq "name='app.bastehyab'" "$RUNNER_TEMP/published-baseline-badging.txt"
+            BASELINE_APK_CODE="$(sed -n "s/.*versionCode='\([0-9][0-9]*\)'.*/\1/p" "$RUNNER_TEMP/published-baseline-badging.txt" | head -n 1)"
+            if [[ "$BASELINE_APK_CODE" != "$PUBLISHED_VERSION_CODE_BASELINE" ]]; then
+              echo "::error::Imported published APK versionCode ($BASELINE_APK_CODE) must match PUBLISHED_VERSION_CODE_BASELINE ($PUBLISHED_VERSION_CODE_BASELINE)."
+              exit 1
+            fi
+            "$BUILD_TOOLS/apksigner" verify --print-certs "$BASELINE_APK" > "$RUNNER_TEMP/published-baseline-signer.txt"
+            echo "published_baseline_apk=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "published_baseline_apk=false" >> "$GITHUB_OUTPUT"
+          fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::error::Release $TAG already exists; releases are immutable and cannot be overwritten."
+            exit 1
+          fi
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]] && git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "::error::Tag $TAG already exists; refusing to move or reuse it."
+            exit 1
+          fi
+          echo "version_name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
+          echo "version_code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "previous_tag=$PREVIOUS_GITHUB_TAG" >> "$GITHUB_OUTPUT"
+          echo "published_baseline=$PUBLISHED_VERSION_CODE_BASELINE" >> "$GITHUB_OUTPUT"
 
-      - name: Validate signing secrets
+      # Release secrets are scoped to this job only and are never uploaded as artifacts.
+      - name: Validate and mask signing secrets
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
@@ -251,14 +328,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          missing=""
           for name in KEYSTORE_BASE64 KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
-            if [ -z "${!name:-}" ]; then missing="$missing $name"; fi
+            value="${!name:-}"
+            if [[ -z "$value" ]]; then
+              echo "::error::Required signing secret $name is missing."
+              exit 1
+            fi
+            echo "::add-mask::$value"
           done
-          if [ -n "$missing" ]; then
-            echo "::error::GitHub Secrets missing:$missing"
-            exit 1
-          fi
 
       - name: Prepare temporary signing properties
         env:
@@ -266,74 +343,190 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          KEYSTORE_PATH: ${{ runner.temp }}/bastehyab-release.jks
         shell: bash
         run: |
           set -euo pipefail
-          keystore_path="$RUNNER_TEMP/bastehyab-release.jks"
-          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$keystore_path"
-          test -s "$keystore_path"
-          chmod 600 "$keystore_path"
-          props="$PROJECT_DIR/keystore.properties"
-          {
-            printf 'storeFile=%s\n' "$keystore_path"
-            printf 'storePassword=%s\n' "$KEYSTORE_PASSWORD"
-            printf 'keyAlias=%s\n' "$KEY_ALIAS"
-            printf 'keyPassword=%s\n' "$KEY_PASSWORD"
-          } > "$props"
-          chmod 600 "$props"
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH"
+          test -s "$KEYSTORE_PATH"
+          chmod 600 "$KEYSTORE_PATH"
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          def esc(value):
+              out=[]
+              for i,ch in enumerate(value):
+                  n=ord(ch)
+                  if ch == "\\": out.append("\\\\")
+                  elif ch == "\t": out.append("\\t")
+                  elif ch == "\n": out.append("\\n")
+                  elif ch == "\r": out.append("\\r")
+                  elif ch == "\f": out.append("\\f")
+                  elif ch in "=:# !" and (ch != " " or i == 0): out.append("\\"+ch)
+                  elif n < 0x20 or n > 0x7e:
+                      b=ch.encode("utf-16-be")
+                      if len(b)==2: out.append(f"\\u{int.from_bytes(b,'big'):04x}")
+                      else: out.append(f"\\u{int.from_bytes(b[:2],'big'):04x}\\u{int.from_bytes(b[2:],'big'):04x}")
+                  else: out.append(ch)
+              return "".join(out)
+          values={
+              "storeFile": os.environ["KEYSTORE_PATH"],
+              "storePassword": os.environ["KEYSTORE_PASSWORD"],
+              "keyAlias": os.environ["KEY_ALIAS"],
+              "keyPassword": os.environ["KEY_PASSWORD"],
+          }
+          Path("keystore.properties").write_bytes(("\n".join(f"{k}={esc(v)}" for k,v in values.items())+"\n").encode("ascii"))
+          PY
+          chmod 600 keystore.properties
 
       - name: Build signed Release APK
         shell: bash
         run: |
           set -euo pipefail
-          cd "$PROJECT_DIR"
           test -s keystore.properties
-          gradle --no-daemon --stacktrace clean :app:assembleRelease
+          ./gradlew --no-daemon --stacktrace clean :app:assembleRelease
           APK="$(find app/build/outputs/apk/release -type f -name '*.apk' -print -quit)"
-          if [ -z "$APK" ]; then
-            echo "::error::Release APK was not generated."
-            exit 1
-          fi
-          mkdir -p "$GITHUB_WORKSPACE/dist"
-          cp "$APK" "$GITHUB_WORKSPACE/dist/Bastehyab-Release.apk"
+          test -n "$APK"
+          mkdir -p dist
+          cp "$APK" dist/Bastehyab-Release.apk
 
-      - name: Verify signed Release APK and publish
+      - name: Validate APK identity, signature, alignment and version
+        id: apk-verify
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
-          apk="$GITHUB_WORKSPACE/dist/Bastehyab-Release.apk"
-          build_tools="${ANDROID_HOME}/build-tools/34.0.0"
-          "$build_tools/apksigner" verify --verbose --print-certs "$apk"
-          "$build_tools/zipalign" -c -v 4 "$apk"
-          "$build_tools/aapt" dump badging "$apk" > "$RUNNER_TEMP/badging.txt"
-          grep -q "name='app.bastehyab'" "$RUNNER_TEMP/badging.txt"
-          grep -q "versionCode='${BH_VERSION_CODE}'" "$RUNNER_TEMP/badging.txt"
-          sha256sum "$apk" > "$GITHUB_WORKSPACE/dist/SHA256.txt"
-          tag="bastehyab-build-${GITHUB_RUN_NUMBER}"
-          notes="$RUNNER_TEMP/release-notes.md"
-          {
-            echo "نسخهٔ Release بسته‌یاب 1.9.0"
-            echo
-            echo "- versionCode: ${BH_VERSION_CODE}"
-            echo "- Android minSdk: 24"
-            echo "- APK با کلید انتشار پروژه امضا و با apksigner بررسی شده است."
-            echo "- خروجی Debug برای نصب به‌عنوان به‌روزرسانی Release مناسب نیست."
-          } > "$notes"
-          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$tag" "$apk" "$GITHUB_WORKSPACE/dist/SHA256.txt" --repo "$GITHUB_REPOSITORY" --clobber
-            gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --title "Bastehyab 1.9.0 build ${GITHUB_RUN_NUMBER}" --notes-file "$notes"
-          else
-            gh release create "$tag" "$apk" "$GITHUB_WORKSPACE/dist/SHA256.txt" \
-              --repo "$GITHUB_REPOSITORY" \
-              --title "Bastehyab 1.9.0 build ${GITHUB_RUN_NUMBER}" \
-              --notes-file "$notes"
+          APK="$GITHUB_WORKSPACE/dist/Bastehyab-Release.apk"
+          BUILD_TOOLS="${ANDROID_HOME:-${ANDROID_SDK_ROOT}}/build-tools/36.0.0"
+          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK" > "$RUNNER_TEMP/current-signer.txt"
+          "$BUILD_TOOLS/zipalign" -c -v 4 "$APK"
+          "$BUILD_TOOLS/aapt" dump badging "$APK" > "$RUNNER_TEMP/current-badging.txt"
+          grep -Fq "name='app.bastehyab'" "$RUNNER_TEMP/current-badging.txt"
+          grep -Fq "versionName='${{ steps.release-meta.outputs.version_name }}'" "$RUNNER_TEMP/current-badging.txt"
+          grep -Fq "versionCode='${{ steps.release-meta.outputs.version_code }}'" "$RUNNER_TEMP/current-badging.txt"
+          CERT="$(sed -n 's/.*Signer #1 certificate SHA-256 digest: //p' "$RUNNER_TEMP/current-signer.txt" | head -n 1 | tr '[:upper:]' '[:lower:]')"
+          test -n "$CERT"
+          if [[ "${{ steps.release-meta.outputs.published_baseline_apk }}" == "true" ]]; then
+            PUBLISHED_CERT="$(sed -n 's/.*Signer #1 certificate SHA-256 digest: //p' "$RUNNER_TEMP/published-baseline-signer.txt" | head -n 1 | tr '[:upper:]' '[:lower:]')"
+            if [[ "$PUBLISHED_CERT" != "$CERT" ]]; then
+              echo "::error::Release signing certificate does not match imported Google published baseline APK."
+              exit 1
+            fi
           fi
+          printf '%s  %s\n' "$CERT" "Bastehyab release signing certificate SHA-256" > dist/Signing-Certificate-SHA256.txt
+          sha256sum dist/Bastehyab-Release.apk > dist/SHA256.txt
+          echo "certificate=$CERT" >> "$GITHUB_OUTPUT"
+
+      - name: Validate upgrade against previous GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          PREVIOUS_TAG="${{ steps.release-meta.outputs.previous_tag }}"
+          mkdir -p "$RUNNER_TEMP/previous-release"
+          if [[ -n "$PREVIOUS_TAG" ]]; then
+            gh release download "$PREVIOUS_TAG" --pattern 'Bastehyab-Release.apk' --dir "$RUNNER_TEMP/previous-release"
+            PREVIOUS_APK="$RUNNER_TEMP/previous-release/Bastehyab-Release.apk"
+          elif [[ "${{ steps.release-meta.outputs.published_baseline_apk }}" == "true" ]]; then
+            PREVIOUS_APK="$RUNNER_TEMP/published-baseline/Bastehyab-Published-Baseline.apk"
+            cp "$PREVIOUS_APK" "$RUNNER_TEMP/previous-release/Bastehyab-Release.apk"
+            PREVIOUS_APK="$RUNNER_TEMP/previous-release/Bastehyab-Release.apk"
+          else
+            echo "::warning::No prior GitHub APK or imported published baseline APK exists; upgrade install test is skipped."
+            echo "Upgrade install test skipped: import the previous signed published APK as documented." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          BUILD_TOOLS="${ANDROID_HOME:-${ANDROID_SDK_ROOT}}/build-tools/36.0.0"
+          PREVIOUS_CODE="$("$BUILD_TOOLS/aapt" dump badging "$PREVIOUS_APK" | sed -n "s/.*versionCode='\\([0-9][0-9]*\\)'.*/\\1/p" | head -n 1)"
+          CURRENT_CODE="${{ steps.release-meta.outputs.version_code }}"
+          [[ -n "$PREVIOUS_CODE" && "$CURRENT_CODE" -gt "$PREVIOUS_CODE" ]]
+          "$BUILD_TOOLS/apksigner" verify --print-certs "$PREVIOUS_APK" > "$RUNNER_TEMP/previous-signer.txt"
+          PREVIOUS_CERT="$(sed -n 's/.*Signer #1 certificate SHA-256 digest: //p' "$RUNNER_TEMP/previous-signer.txt" | head -n 1 | tr '[:upper:]' '[:lower:]')"
+          CURRENT_CERT="${{ steps.apk-verify.outputs.certificate }}"
+          if [[ "$PREVIOUS_CERT" != "$CURRENT_CERT" ]]; then
+            echo "::error::Signing certificate differs from previous release; upgrade would fail."
+            exit 1
+          fi
+          echo "Previous release $PREVIOUS_TAG code $PREVIOUS_CODE and signing certificate match." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Install and upgrade-test on Android 16 emulator
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          PREVIOUS_TAG="${{ steps.release-meta.outputs.previous_tag }}"
+          mkdir -p "$RUNNER_TEMP/previous-release"
+          if [[ -n "$PREVIOUS_TAG" ]]; then
+            gh release download "$PREVIOUS_TAG" --pattern 'Bastehyab-Release.apk' --dir "$RUNNER_TEMP/previous-release"
+          else
+            cp "$RUNNER_TEMP/published-baseline/Bastehyab-Published-Baseline.apk" \
+              "$RUNNER_TEMP/previous-release/Bastehyab-Release.apk"
+          fi
+          echo "no" | avdmanager create avd --force --name bastehyab-release-api36 \
+            --package "system-images;android-36;google_apis;x86_64" --device "pixel_2"
+          emulator -avd bastehyab-release-api36 -no-window -no-audio -no-boot-anim \
+            -no-snapshot -wipe-data -gpu swiftshader_indirect -memory 2048 \
+            > "$RUNNER_TEMP/bastehyab-release-emulator.log" 2>&1 &
+          EMULATOR_PID=$!
+          cleanup_emulator() { adb emu kill >/dev/null 2>&1 || true; kill "$EMULATOR_PID" >/dev/null 2>&1 || true; }
+          trap cleanup_emulator EXIT
+          adb wait-for-device
+          booted=0
+          for attempt in $(seq 1 180); do
+            if [[ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" == "1" ]]; then booted=1; break; fi
+            sleep 2
+          done
+          [[ "$booted" -eq 1 ]]
+          adb install "$RUNNER_TEMP/previous-release/Bastehyab-Release.apk"
+          adb install -r "$GITHUB_WORKSPACE/dist/Bastehyab-Release.apk"
+          adb shell monkey -p app.bastehyab 1 >/dev/null
+          adb shell dumpsys package app.bastehyab | grep -q "versionCode=${{ steps.release-meta.outputs.version_code }}"
+          echo "Install + in-place upgrade passed on API 36." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Generate notes from canonical CHANGELOG section
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/release/generate-release-notes.py \
+            "${{ steps.release-meta.outputs.version_name }}" dist/RELEASE-NOTES.md
+
+      - name: Publish immutable versioned GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.release-meta.outputs.tag }}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::error::Release $TAG already exists; refusing to overwrite assets or notes."
+            exit 1
+          fi
+          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+            gh release create "$TAG" \
+              dist/Bastehyab-Release.apk dist/SHA256.txt dist/Signing-Certificate-SHA256.txt dist/RELEASE-NOTES.md \
+              --verify-tag --title "Bastehyab ${{ steps.release-meta.outputs.version_name }}" \
+              --notes-file dist/RELEASE-NOTES.md --latest
+          else
+            gh release create "$TAG" \
+              dist/Bastehyab-Release.apk dist/SHA256.txt dist/Signing-Certificate-SHA256.txt dist/RELEASE-NOTES.md \
+              --target "$GITHUB_SHA" --title "Bastehyab ${{ steps.release-meta.outputs.version_name }}" \
+              --notes-file dist/RELEASE-NOTES.md --latest
+          fi
+          {
+            echo "## Published release $TAG"
+            echo "- versionName: ${{ steps.release-meta.outputs.version_name }}"
+            echo "- versionCode: ${{ steps.release-meta.outputs.version_code }}"
+            echo "- Imported published baseline: ${{ steps.release-meta.outputs.published_baseline }}"
+            echo "- APK SHA-256: $(cut -d' ' -f1 dist/SHA256.txt)"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Remove temporary signing material
         if: always()
         shell: bash
         run: |
-          rm -f "$PROJECT_DIR/keystore.properties" || true
-          rm -f "$RUNNER_TEMP/bastehyab-release.jks" || true
+          set +e
+          rm -f "$GITHUB_WORKSPACE/keystore.properties"
+          rm -f "$RUNNER_TEMP/bastehyab-release.jks"
