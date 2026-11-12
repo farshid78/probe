@@ -158,8 +158,28 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "no" | avdmanager create avd --force --name bastehyab-api36 \
-            --package "system-images;android-36;google_apis;x86_64" --device "pixel_2"
+        echo "no" | avdmanager create avd --force \
+  --name bastehyab-api36 \
+  --package "system-images;android-36;google_apis;x86_64"
+
+emulator -avd bastehyab-api36 \
+  -no-window -no-audio -no-boot-anim -no-snapshot -wipe-data \
+  -no-boot-wizard -gpu swiftshader_indirect -memory 2048 \
+  > "$RUNNER_TEMP/bastehyab-emulator.log" 2>&1 &
+
+EMULATOR_PID=$!
+
+cleanup_emulator() {
+  adb emu kill >/dev/null 2>&1 || true
+  kill "$EMULATOR_PID" >/dev/null 2>&1 || true
+}
+trap cleanup_emulator EXIT
+
+if ! timeout 180s adb wait-for-device; then
+  echo "::error::Emulator did not become available through ADB."
+  tail -n 120 "$RUNNER_TEMP/bastehyab-emulator.log" || true
+  exit 1
+fi
           emulator -avd bastehyab-api36 -no-window -no-audio -no-boot-anim \
             -no-snapshot -wipe-data -gpu swiftshader_indirect -memory 2048 \
             > "$RUNNER_TEMP/bastehyab-emulator.log" 2>&1 &
