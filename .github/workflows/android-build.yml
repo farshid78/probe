@@ -202,40 +202,153 @@ jobs:
       - name: Run Android 16 instrumentation suite
         shell: bash
         run: |
-          set -euo pipefail
+          set -Eeuo pipefail
+
           SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          if [[ -z "$SDK_ROOT" ]]; then
+            echo "::error::Android SDK root is not configured."
+            exit 1
+          fi
+
           export PATH="$SDK_ROOT/emulator:$SDK_ROOT/platform-tools:$SDK_ROOT/cmdline-tools/latest/bin:$PATH"
-          echo "no" | avdmanager create avd --force --name bastehyab-api36 \
-            --package "system-images;android-36;google_apis;x86_64" --device "pixel_2"
-          emulator -avd bastehyab-api36 -no-window -no-audio -no-boot-anim \
-            -no-snapshot -wipe-data -gpu swiftshader_indirect -memory 2048 \
+
+          # Use an explicit, isolated AVD directory.
+          export ANDROID_USER_HOME="$RUNNER_TEMP/android-user-home"
+          export ANDROID_AVD_HOME="$ANDROID_USER_HOME/avd"
+          mkdir -p "$ANDROID_AVD_HOME"
+
+          AVD_NAME="bastehyab-api36"
+          AVD_PATH="$ANDROID_AVD_HOME/$AVD_NAME.avd"
+          AVD_INI="$ANDROID_AVD_HOME/$AVD_NAME.ini"
+
+          echo "Android SDK: $SDK_ROOT"
+          echo "Android AVD home: $ANDROID_AVD_HOME"
+
+          if [[ ! -x "$SDK_ROOT/emulator/emulator" ]]; then
+            echo "::error::Android emulator executable is missing."
+            exit 1
+          fi
+
+          if ! command -v avdmanager >/dev/null 2>&1; then
+            echo "::error::avdmanager was not found."
+            exit 1
+          fi
+
+          if ! command -v adb >/dev/null 2>&1; then
+            echo "::error::adb was not found."
+            exit 1
+          fi
+
+          # Verify that the requested Android 16 system image is installed.
+          if ! sdkmanager --list_installed | grep -Fq \
+            "system-images;android-36;google_apis;x86_64"; then
+            echo "::error::Android 36 Google APIs x86_64 system image is not installed."
+            exit 1
+          fi
+
+          # Remove any incomplete AVD left by an earlier attempt.
+          rm -rf "$AVD_PATH" "$AVD_INI"
+
+          # Create the AVD at an explicit path instead of relying on HOME defaults.
+          set +e
+          printf 'no\n' | avdmanager create avd \
+            --force \
+            --name "$AVD_NAME" \
+            --package "system-images;android-36;google_apis;x86_64" \
+            --device "pixel_2" \
+            --path "$AVD_PATH"
+          AVD_CREATE_STATUS=$?
+          set -e
+
+          if [[ "$AVD_CREATE_STATUS" -ne 0 ]]; then
+            echo "::error::avdmanager failed to create the AVD (exit $AVD_CREATE_STATUS)."
+            avdmanager list device || true
+            find "$ANDROID_AVD_HOME" -maxdepth 3 -type f -print || true
+            exit 1
+          fi
+
+          # Confirm that both AVD configuration files really exist.
+          if [[ ! -f "$AVD_INI" || ! -f "$AVD_PATH/config.ini" ]]; then
+            echo "::error::AVD creation did not produce the expected configuration files."
+            echo "Expected: $AVD_INI"
+            echo "Expected: $AVD_PATH/config.ini"
+            find "$ANDROID_AVD_HOME" -maxdepth 3 -type f -print || true
+            avdmanager list avd || true
+            exit 1
+          fi
+
+          echo "Created AVD successfully:"
+          avdmanager list avd
+
+          # Confirm that the emulator can resolve this exact AVD name.
+          if ! emulator -list-avds | grep -Fxq "$AVD_NAME"; then
+            echo "::error::Emulator cannot find the newly created AVD."
+            emulator -list-avds || true
+            exit 1
+          fi
+
+          adb start-server
+          adb kill-server || true
+          adb start-server
+
+          # Start the emulator.
+          emulator -avd "$AVD_NAME" \
+            -port 5554 \
+            -no-window \
+            -no-audio \
+            -no-boot-anim \
+            -no-snapshot \
+            -wipe-data \
+            -gpu swiftshader_indirect \
+            -memory 2048 \
             > "$RUNNER_TEMP/bastehyab-emulator.log" 2>&1 &
+
           EMULATOR_PID=$!
+
           cleanup_emulator() {
             adb emu kill >/dev/null 2>&1 || true
             kill "$EMULATOR_PID" >/dev/null 2>&1 || true
           }
           trap cleanup_emulator EXIT
-          if ! timeout 180s adb wait-for-device; then
+
+          # Wait for the emulator to register with ADB.
+          if ! timeout 180s adb -s emulator-5554 wait-for-device; then
             echo "::error::Emulator did not become available through ADB."
-            tail -n 150 "$RUNNER_TEMP/bastehyab-emulator.log" || true
+            tail -n 200 "$RUNNER_TEMP/bastehyab-emulator.log" || true
             adb devices -l || true
             exit 1
           fi
-          booted=0
+
+          # Wait for Android boot completion.
+          BOOTED=0
           for attempt in $(seq 1 180); do
-            state="$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')"
-            if [[ "$state" == "1" ]]; then booted=1; break; fi
+            STATE="$(adb -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
+            if [[ "$STATE" == "1" ]]; then
+              BOOTED=1
+              break
+            fi
             sleep 2
           done
-          if [[ "$booted" -ne 1 ]]; then
+
+          if [[ "$BOOTED" -ne 1 ]]; then
             echo "::error::Android 16 emulator did not finish booting."
-            tail -n 120 "$RUNNER_TEMP/bastehyab-emulator.log" || true
+            tail -n 200 "$RUNNER_TEMP/bastehyab-emulator.log" || true
+            adb devices -l || true
             exit 1
           fi
+
+          echo "Android emulator boot completed successfully."
+          adb -s emulator-5554 shell getprop ro.build.version.release
+          adb -s emulator-5554 shell getprop ro.build.version.sdk
+
+          # Run instrumentation tests.
           adb logcat -c
           ./gradlew --no-daemon --stacktrace :app:connectedDebugAndroidTest
-          adb logcat -d -s BastehyabBackdropPerf:I > "$RUNNER_TEMP/bastehyab-backdrop-performance.log"
+
+          # Collect performance logs.
+          adb logcat -d -s BastehyabBackdropPerf:I \
+            > "$RUNNER_TEMP/bastehyab-backdrop-performance.log"
+
           if [[ -s "$RUNNER_TEMP/bastehyab-backdrop-performance.log" ]]; then
             cat "$RUNNER_TEMP/bastehyab-backdrop-performance.log"
             {
