@@ -88,50 +88,6 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      - name: Install Android emulator system dependencies
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y \
-            libpulse0 \
-            libnss3 \
-            libx11-6 \
-            libx11-xcb1 \
-            libxcb1 \
-            libxcomposite1 \
-            libxcursor1 \
-            libxi6 \
-            libxrandr2 \
-            libxdamage1 \
-            libxfixes3 \
-            libxrender1 \
-            libxtst6 \
-            libglib2.0-0 \
-            libdbus-1-3 \
-            libfontconfig1
-
-          # Ubuntu 24.04 uses libasound2t64; older runners use libasound2.
-          if apt-cache show libasound2t64 >/dev/null 2>&1; then
-            sudo apt-get install -y libasound2t64
-          elif apt-cache show libasound2 >/dev/null 2>&1; then
-            sudo apt-get install -y libasound2
-          fi
-
-          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME}}"
-          EMULATOR_QEMU="$SDK_ROOT/emulator/qemu/linux-x86_64/qemu-system-x86_64"
-          if [[ ! -x "$EMULATOR_QEMU" ]]; then
-            echo "::error::Android emulator QEMU binary was not found at $EMULATOR_QEMU"
-            exit 1
-          fi
-
-          echo "Checking Android emulator shared-library dependencies..."
-          ldd "$EMULATOR_QEMU" | tee "$RUNNER_TEMP/emulator-ldd.txt"
-          if grep -q "not found" "$RUNNER_TEMP/emulator-ldd.txt"; then
-            echo "::error::Android emulator still has missing shared libraries."
-            exit 1
-          fi
-
       - name: Setup Android SDK 36
         uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
 
@@ -139,7 +95,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME}}"
           yes | sdkmanager --licenses >/dev/null || true
           sdkmanager --install \
             "platform-tools" \
@@ -147,14 +102,40 @@ jobs:
             "build-tools;36.0.0" \
             "emulator" \
             "system-images;android-36;google_apis;x86_64"
+
+      - name: Install Android emulator Linux dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y libpulse0 libnss3 libx11-6 libx11-xcb1 libxcb1 libxcomposite1 libxcursor1 libxi6 libxrandr2 libxdamage1 libxfixes3 libxrender1 libxtst6 libdbus-1-3 libfontconfig1
+          if apt-cache show libasound2t64 >/dev/null 2>&1; then
+            sudo apt-get install -y libasound2t64
+          elif apt-cache show libasound2 >/dev/null 2>&1; then
+            sudo apt-get install -y libasound2
+          fi
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          if [[ -z "$SDK_ROOT" || ! -x "$SDK_ROOT/emulator/emulator" ]]; then
+            echo "::error::Android emulator executable was not found under ${SDK_ROOT:-<SDK root unset>}"
+            echo "SDK environment: ANDROID_HOME=${ANDROID_HOME:-unset}; ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-unset}"
+            exit 1
+          fi
           echo "$SDK_ROOT/emulator" >> "$GITHUB_PATH"
           echo "$SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
           echo "$SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
-          export PATH="$SDK_ROOT/emulator:$SDK_ROOT/platform-tools:$SDK_ROOT/cmdline-tools/latest/bin:$PATH"
-          command -v emulator
-          emulator -version
-          command -v adb
-          adb version
+          QEMU="$(find -L "$SDK_ROOT/emulator" -name 'qemu-system-x86_64' -print -quit 2>/dev/null || true)"
+          if [[ -n "$QEMU" ]]; then
+            echo "Found QEMU: $QEMU"
+            ldd "$QEMU" | tee "$RUNNER_TEMP/emulator-qemu-ldd.txt"
+            if grep -q 'not found' "$RUNNER_TEMP/emulator-qemu-ldd.txt"; then
+              echo "::error::QEMU has unresolved shared-library dependencies."
+              exit 1
+            fi
+          else
+            echo "QEMU binary was not located by filename; emulator version check follows."
+            find -L "$SDK_ROOT/emulator" -maxdepth 5 -type f -print | head -n 100 || true
+          fi
+          "$SDK_ROOT/emulator/emulator" -version
 
       - name: Validate canonical version and release trigger
         id: version
@@ -211,69 +192,39 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME}}"
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
           export PATH="$SDK_ROOT/emulator:$SDK_ROOT/platform-tools:$SDK_ROOT/cmdline-tools/latest/bin:$PATH"
-          AVD_NAME="bastehyab-api36"
-          EMULATOR_LOG="$RUNNER_TEMP/bastehyab-emulator.log"
-
-          command -v emulator
-          command -v avdmanager
-          echo "no" | avdmanager create avd --force \
-            --name "$AVD_NAME" \
-            --package "system-images;android-36;google_apis;x86_64"
-
-          emulator -avd "$AVD_NAME" \
-            -no-window \
-            -no-audio \
-            -no-boot-anim \
-            -no-snapshot \
-            -wipe-data \
-            -no-boot-wizard \
-            -gpu swiftshader_indirect \
-            -memory 2048 \
-            > "$EMULATOR_LOG" 2>&1 &
+          echo "no" | avdmanager create avd --force --name bastehyab-api36 \
+            --package "system-images;android-36;google_apis;x86_64" --device "pixel_2"
+          emulator -avd bastehyab-api36 -no-window -no-audio -no-boot-anim \
+            -no-snapshot -wipe-data -gpu swiftshader_indirect -memory 2048 \
+            > "$RUNNER_TEMP/bastehyab-emulator.log" 2>&1 &
           EMULATOR_PID=$!
-
           cleanup_emulator() {
             adb emu kill >/dev/null 2>&1 || true
             kill "$EMULATOR_PID" >/dev/null 2>&1 || true
           }
           trap cleanup_emulator EXIT
-
-          echo "Waiting for Android emulator..."
           if ! timeout 180s adb wait-for-device; then
             echo "::error::Emulator did not become available through ADB."
-            tail -n 150 "$EMULATOR_LOG" || true
+            tail -n 150 "$RUNNER_TEMP/bastehyab-emulator.log" || true
             adb devices -l || true
             exit 1
           fi
-
-          echo "Waiting for Android 16 boot completion..."
           booted=0
           for attempt in $(seq 1 180); do
-            state="$(timeout 10s adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
-            if [[ "$state" == "1" ]]; then
-              booted=1
-              break
-            fi
+            state="$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')"
+            if [[ "$state" == "1" ]]; then booted=1; break; fi
             sleep 2
           done
-
           if [[ "$booted" -ne 1 ]]; then
             echo "::error::Android 16 emulator did not finish booting."
-            echo "----- Emulator log -----"
-            tail -n 150 "$EMULATOR_LOG" || true
-            echo "----- ADB devices -----"
-            adb devices -l || true
+            tail -n 120 "$RUNNER_TEMP/bastehyab-emulator.log" || true
             exit 1
           fi
-
-          echo "Android 16 emulator booted successfully."
           adb logcat -c
           ./gradlew --no-daemon --stacktrace :app:connectedDebugAndroidTest
-          adb logcat -d -s BastehyabBackdropPerf:I \
-            > "$RUNNER_TEMP/bastehyab-backdrop-performance.log"
-
+          adb logcat -d -s BastehyabBackdropPerf:I > "$RUNNER_TEMP/bastehyab-backdrop-performance.log"
           if [[ -s "$RUNNER_TEMP/bastehyab-backdrop-performance.log" ]]; then
             cat "$RUNNER_TEMP/bastehyab-backdrop-performance.log"
             {
@@ -376,50 +327,6 @@ jobs:
         shell: bash
         run: bash tools/release/bootstrap-wrapper.sh
 
-      - name: Install Android emulator system dependencies
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y \
-            libpulse0 \
-            libnss3 \
-            libx11-6 \
-            libx11-xcb1 \
-            libxcb1 \
-            libxcomposite1 \
-            libxcursor1 \
-            libxi6 \
-            libxrandr2 \
-            libxdamage1 \
-            libxfixes3 \
-            libxrender1 \
-            libxtst6 \
-            libglib2.0-0 \
-            libdbus-1-3 \
-            libfontconfig1
-
-          # Ubuntu 24.04 uses libasound2t64; older runners use libasound2.
-          if apt-cache show libasound2t64 >/dev/null 2>&1; then
-            sudo apt-get install -y libasound2t64
-          elif apt-cache show libasound2 >/dev/null 2>&1; then
-            sudo apt-get install -y libasound2
-          fi
-
-          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME}}"
-          EMULATOR_QEMU="$SDK_ROOT/emulator/qemu/linux-x86_64/qemu-system-x86_64"
-          if [[ ! -x "$EMULATOR_QEMU" ]]; then
-            echo "::error::Android emulator QEMU binary was not found at $EMULATOR_QEMU"
-            exit 1
-          fi
-
-          echo "Checking Android emulator shared-library dependencies..."
-          ldd "$EMULATOR_QEMU" | tee "$RUNNER_TEMP/emulator-ldd.txt"
-          if grep -q "not found" "$RUNNER_TEMP/emulator-ldd.txt"; then
-            echo "::error::Android emulator still has missing shared libraries."
-            exit 1
-          fi
-
       - name: Setup Android SDK 36
         uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
 
@@ -427,7 +334,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME}}"
           yes | sdkmanager --licenses >/dev/null || true
           sdkmanager --install \
             "platform-tools" \
@@ -435,14 +341,40 @@ jobs:
             "build-tools;36.0.0" \
             "emulator" \
             "system-images;android-36;google_apis;x86_64"
+
+      - name: Install Android emulator Linux dependencies (release job)
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y libpulse0 libnss3 libx11-6 libx11-xcb1 libxcb1 libxcomposite1 libxcursor1 libxi6 libxrandr2 libxdamage1 libxfixes3 libxrender1 libxtst6 libdbus-1-3 libfontconfig1
+          if apt-cache show libasound2t64 >/dev/null 2>&1; then
+            sudo apt-get install -y libasound2t64
+          elif apt-cache show libasound2 >/dev/null 2>&1; then
+            sudo apt-get install -y libasound2
+          fi
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          if [[ -z "$SDK_ROOT" || ! -x "$SDK_ROOT/emulator/emulator" ]]; then
+            echo "::error::Android emulator executable was not found under ${SDK_ROOT:-<SDK root unset>}"
+            echo "SDK environment: ANDROID_HOME=${ANDROID_HOME:-unset}; ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-unset}"
+            exit 1
+          fi
           echo "$SDK_ROOT/emulator" >> "$GITHUB_PATH"
           echo "$SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
           echo "$SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
-          export PATH="$SDK_ROOT/emulator:$SDK_ROOT/platform-tools:$SDK_ROOT/cmdline-tools/latest/bin:$PATH"
-          command -v emulator
-          emulator -version
-          command -v adb
-          adb version
+          QEMU="$(find -L "$SDK_ROOT/emulator" -name 'qemu-system-x86_64' -print -quit 2>/dev/null || true)"
+          if [[ -n "$QEMU" ]]; then
+            echo "Found QEMU: $QEMU"
+            ldd "$QEMU" | tee "$RUNNER_TEMP/emulator-qemu-ldd.txt"
+            if grep -q 'not found' "$RUNNER_TEMP/emulator-qemu-ldd.txt"; then
+              echo "::error::QEMU has unresolved shared-library dependencies."
+              exit 1
+            fi
+          else
+            echo "QEMU binary was not located by filename; emulator version check follows."
+            find -L "$SDK_ROOT/emulator" -maxdepth 5 -type f -print | head -n 100 || true
+          fi
+          "$SDK_ROOT/emulator/emulator" -version
 
       - name: Validate version, imported published baseline and prior release
         id: release-meta
@@ -652,8 +584,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME}}"
-          export PATH="$SDK_ROOT/emulator:$SDK_ROOT/platform-tools:$SDK_ROOT/cmdline-tools/latest/bin:$PATH"
           PREVIOUS_TAG="${{ steps.release-meta.outputs.previous_tag }}"
           mkdir -p "$RUNNER_TEMP/previous-release"
           if [[ -n "$PREVIOUS_TAG" ]]; then
@@ -662,42 +592,28 @@ jobs:
             cp "$RUNNER_TEMP/published-baseline/Bastehyab-Published-Baseline.apk" \
               "$RUNNER_TEMP/previous-release/Bastehyab-Release.apk"
           fi
-
-          AVD_NAME="bastehyab-release-api36"
-          EMULATOR_LOG="$RUNNER_TEMP/bastehyab-release-emulator.log"
-          echo "no" | avdmanager create avd --force --name "$AVD_NAME" \
-            --package "system-images;android-36;google_apis;x86_64"
-
-          emulator -avd "$AVD_NAME" -no-window -no-audio -no-boot-anim \
-            -no-snapshot -wipe-data -no-boot-wizard -gpu swiftshader_indirect -memory 2048 \
-            > "$EMULATOR_LOG" 2>&1 &
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          export PATH="$SDK_ROOT/emulator:$SDK_ROOT/platform-tools:$SDK_ROOT/cmdline-tools/latest/bin:$PATH"
+          echo "no" | avdmanager create avd --force --name bastehyab-release-api36 \
+            --package "system-images;android-36;google_apis;x86_64" --device "pixel_2"
+          emulator -avd bastehyab-release-api36 -no-window -no-audio -no-boot-anim \
+            -no-snapshot -wipe-data -gpu swiftshader_indirect -memory 2048 \
+            > "$RUNNER_TEMP/bastehyab-release-emulator.log" 2>&1 &
           EMULATOR_PID=$!
-          cleanup_emulator() {
-            adb emu kill >/dev/null 2>&1 || true
-            kill "$EMULATOR_PID" >/dev/null 2>&1 || true
-          }
+          cleanup_emulator() { adb emu kill >/dev/null 2>&1 || true; kill "$EMULATOR_PID" >/dev/null 2>&1 || true; }
           trap cleanup_emulator EXIT
-
           if ! timeout 180s adb wait-for-device; then
             echo "::error::Release emulator did not become available through ADB."
-            tail -n 150 "$EMULATOR_LOG" || true
+            tail -n 150 "$RUNNER_TEMP/bastehyab-release-emulator.log" || true
             adb devices -l || true
             exit 1
           fi
-
           booted=0
           for attempt in $(seq 1 180); do
-            state="$(timeout 10s adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
-            if [[ "$state" == "1" ]]; then booted=1; break; fi
+            if [[ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" == "1" ]]; then booted=1; break; fi
             sleep 2
           done
-          if [[ "$booted" -ne 1 ]]; then
-            echo "::error::Release emulator did not finish booting."
-            tail -n 150 "$EMULATOR_LOG" || true
-            adb devices -l || true
-            exit 1
-          fi
-
+          [[ "$booted" -eq 1 ]]
           adb install "$RUNNER_TEMP/previous-release/Bastehyab-Release.apk"
           adb install -r "$GITHUB_WORKSPACE/dist/Bastehyab-Release.apk"
           adb shell monkey -p app.bastehyab 1 >/dev/null
