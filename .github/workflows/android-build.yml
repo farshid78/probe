@@ -31,32 +31,6 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Extract the committed Android source archive into workspace root
-        shell: bash
-        run: |
-          set -euo pipefail
-          mapfile -t archives < <(git ls-files '*.zip')
-          if [[ "${#archives[@]}" -ne 1 ]]; then
-            echo "::error::Expected exactly one committed Android source ZIP; found ${#archives[@]}"
-            exit 1
-          fi
-          extract_dir="$RUNNER_TEMP/bastehyab-source"
-          rm -rf "$extract_dir"
-          mkdir -p "$extract_dir"
-          unzip -q "${archives[0]}" -d "$extract_dir"
-          mapfile -t settings_files < <(find "$extract_dir" -type f -name settings.gradle -not -path '*/__MACOSX/*')
-          if [[ "${#settings_files[@]}" -ne 1 ]]; then
-            echo "::error::Expected exactly one settings.gradle inside the source ZIP; found ${#settings_files[@]}"
-            exit 1
-          fi
-          project_dir="$(dirname "${settings_files[0]}")"
-          cp -a "$project_dir/." "$GITHUB_WORKSPACE/"
-          test -f "$GITHUB_WORKSPACE/settings.gradle"
-          test -f "$GITHUB_WORKSPACE/build.gradle"
-          test -f "$GITHUB_WORKSPACE/app/build.gradle"
-          test -f "$GITHUB_WORKSPACE/version.properties"
-          echo "Extracted Android project from ${archives[0]} into $GITHUB_WORKSPACE"
-
       - name: Setup Java 17
         uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
         with:
@@ -102,69 +76,6 @@ jobs:
             "build-tools;36.0.0" \
             "emulator" \
             "system-images;android-36;google_apis;x86_64"
-
-      - name: Install Android emulator Linux dependencies
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y libpulse0 libnss3 libx11-6 libx11-xcb1 libxcb1 libxcomposite1 libxcursor1 libxi6 libxrandr2 libxdamage1 libxfixes3 libxrender1 libxtst6 libdbus-1-3 libfontconfig1
-          if apt-cache show libasound2t64 >/dev/null 2>&1; then
-            sudo apt-get install -y libasound2t64
-          elif apt-cache show libasound2 >/dev/null 2>&1; then
-            sudo apt-get install -y libasound2
-          fi
-          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
-          if [[ -z "$SDK_ROOT" || ! -x "$SDK_ROOT/emulator/emulator" ]]; then
-            echo "::error::Android emulator executable was not found under ${SDK_ROOT:-<SDK root unset>}"
-            echo "SDK environment: ANDROID_HOME=${ANDROID_HOME:-unset}; ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-unset}"
-            exit 1
-          fi
-          echo "$SDK_ROOT/emulator" >> "$GITHUB_PATH"
-          echo "$SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
-          echo "$SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
-          # Android Emulator ships its own shared libraries inside the SDK.
-          # Discover every directory containing shared objects and expose them
-          # both to this step and to all following workflow steps.
-          EMULATOR_LIB_DIRS="$(find -L "$SDK_ROOT/emulator" -type f \
-            \( -name '*.so' -o -name '*.so.*' \) -printf '%h\n' 2>/dev/null | sort -u | paste -sd: -)"
-          export LD_LIBRARY_PATH="$SDK_ROOT/emulator:$SDK_ROOT/emulator/lib64:$SDK_ROOT/emulator/lib64/qt/lib:$SDK_ROOT/emulator/qemu/linux-x86_64${EMULATOR_LIB_DIRS:+:$EMULATOR_LIB_DIRS}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-          echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
-          echo "Android Emulator library directories: $EMULATOR_LIB_DIRS"
-
-          QEMU="$(find -L "$SDK_ROOT/emulator" -name 'qemu-system-x86_64' -print -quit 2>/dev/null || true)"
-          if [[ -n "$QEMU" ]]; then
-            echo "Found QEMU: $QEMU"
-            ldd "$QEMU" | tee "$RUNNER_TEMP/emulator-qemu-ldd.txt"
-            if grep -q 'not found' "$RUNNER_TEMP/emulator-qemu-ldd.txt"; then
-              echo "::error::QEMU still has unresolved shared-library dependencies after adding the SDK library paths."
-              echo "SDK emulator library files (first 150):"
-              find -L "$SDK_ROOT/emulator" -type f \( -name '*.so' -o -name '*.so.*' \) -print | head -n 150 || true
-              exit 1
-            fi
-          else
-            echo "QEMU binary was not located by filename; emulator version check follows."
-            find -L "$SDK_ROOT/emulator" -maxdepth 5 -type f -print | head -n 100 || true
-          fi
-          "$SDK_ROOT/emulator/emulator" -version
-
-      - name: Enable KVM access for Android Emulator
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          if [[ ! -e /dev/kvm ]]; then
-            echo "::error::/dev/kvm does not exist on this runner; Android x86_64 emulator cannot run without KVM."
-            exit 1
-          fi
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
-            | sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null
-          sudo udevadm control --reload-rules || true
-          sudo udevadm trigger --name-match=kvm || true
-          # Guarantee access for the current user without needing re-login.
-          sudo chmod 666 /dev/kvm || true
-          ls -l /dev/kvm
-          id
-          grep '^kvm:' /etc/group || true
 
       - name: Validate canonical version and release trigger
         id: version
@@ -218,209 +129,35 @@ jobs:
             :app:assembleDebug
 
       - name: Run Android 16 instrumentation suite
-        timeout-minutes: 30
         shell: bash
         run: |
-          set -Eeuo pipefail
-
-          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
-          if [[ -z "$SDK_ROOT" ]]; then
-            echo "::error::Android SDK root is not configured."
-            exit 1
-          fi
-
-          export PATH="$SDK_ROOT/emulator:$SDK_ROOT/platform-tools:$SDK_ROOT/cmdline-tools/latest/bin:$PATH"
-
-          # Use an explicit, isolated AVD directory.
-          export ANDROID_USER_HOME="$RUNNER_TEMP/android-user-home"
-          export ANDROID_AVD_HOME="$ANDROID_USER_HOME/avd"
-          mkdir -p "$ANDROID_AVD_HOME"
-
-          AVD_NAME="bastehyab-api36"
-          AVD_PATH="$ANDROID_AVD_HOME/$AVD_NAME.avd"
-          AVD_INI="$ANDROID_AVD_HOME/$AVD_NAME.ini"
-
-          echo "Android SDK: $SDK_ROOT"
-          echo "Android AVD home: $ANDROID_AVD_HOME"
-
-          if [[ ! -x "$SDK_ROOT/emulator/emulator" ]]; then
-            echo "::error::Android emulator executable is missing."
-            exit 1
-          fi
-
-          if ! command -v avdmanager >/dev/null 2>&1; then
-            echo "::error::avdmanager was not found."
-            exit 1
-          fi
-
-          if ! command -v adb >/dev/null 2>&1; then
-            echo "::error::adb was not found."
-            exit 1
-          fi
-
-          # Verify KVM is really usable; x86_64 emulation requires it.
-          if [[ ! -e /dev/kvm ]]; then
-            echo "::error::/dev/kvm does not exist; Android x86_64 emulation requires KVM."
-            exit 1
-          fi
-          if [[ ! -r /dev/kvm || ! -w /dev/kvm ]]; then
-            echo "::error::/dev/kvm is not readable/writable by the current user."
-            ls -l /dev/kvm || true
-            exit 1
-          fi
-          echo "KVM device permissions:"
-          ls -l /dev/kvm
-
-          # Verify that the requested Android 16 system image is installed.
-          if ! sdkmanager --list_installed | grep -Fq \
-            "system-images;android-36;google_apis;x86_64"; then
-            echo "::error::Android 36 Google APIs x86_64 system image is not installed."
-            exit 1
-          fi
-
-          # Remove any incomplete AVD left by an earlier attempt.
-          rm -rf "$AVD_PATH" "$AVD_INI"
-
-          # Create the AVD at an explicit path instead of relying on HOME defaults.
-          set +e
-          printf 'no\n' | avdmanager create avd \
-            --force \
-            --name "$AVD_NAME" \
-            --package "system-images;android-36;google_apis;x86_64" \
-            --device "pixel_2" \
-            --path "$AVD_PATH"
-          AVD_CREATE_STATUS=$?
-          set -e
-
-          if [[ "$AVD_CREATE_STATUS" -ne 0 ]]; then
-            echo "::error::avdmanager failed to create the AVD (exit $AVD_CREATE_STATUS)."
-            avdmanager list device || true
-            find "$ANDROID_AVD_HOME" -maxdepth 3 -type f -print || true
-            exit 1
-          fi
-
-          # Confirm that both AVD configuration files really exist.
-          if [[ ! -f "$AVD_INI" || ! -f "$AVD_PATH/config.ini" ]]; then
-            echo "::error::AVD creation did not produce the expected configuration files."
-            echo "Expected: $AVD_INI"
-            echo "Expected: $AVD_PATH/config.ini"
-            find "$ANDROID_AVD_HOME" -maxdepth 3 -type f -print || true
-            avdmanager list avd || true
-            exit 1
-          fi
-
-          echo "Created AVD successfully:"
-          avdmanager list avd
-
-          # Confirm that the emulator can resolve this exact AVD name.
-          if ! emulator -list-avds | grep -Fxq "$AVD_NAME"; then
-            echo "::error::Emulator cannot find the newly created AVD."
-            emulator -list-avds || true
-            exit 1
-          fi
-
-          adb start-server
-          adb kill-server || true
-          adb start-server
-
-          # Start the emulator. More cores so swiftshader is not the bottleneck.
-          emulator -avd "$AVD_NAME" \
-            -port 5554 \
-            -no-window \
-            -no-audio \
-            -no-boot-anim \
-            -no-snapshot \
-            -wipe-data \
-            -gpu swiftshader_indirect \
-            -memory 3072 \
-            -cores 4 \
+          set -euo pipefail
+          echo "no" | avdmanager create avd --force --name bastehyab-api36 \
+            --package "system-images;android-36;google_apis;x86_64" --device "pixel_2"
+          emulator -avd bastehyab-api36 -no-window -no-audio -no-boot-anim \
+            -no-snapshot -wipe-data -gpu swiftshader_indirect -memory 2048 \
             > "$RUNNER_TEMP/bastehyab-emulator.log" 2>&1 &
-
           EMULATOR_PID=$!
-
           cleanup_emulator() {
             adb emu kill >/dev/null 2>&1 || true
             kill "$EMULATOR_PID" >/dev/null 2>&1 || true
           }
           trap cleanup_emulator EXIT
-
-          # Wait for the emulator to register with ADB.
-          if ! timeout 180s adb -s emulator-5554 wait-for-device; then
-            echo "::error::Emulator did not become available through ADB."
-            tail -n 200 "$RUNNER_TEMP/bastehyab-emulator.log" || true
-            adb devices -l || true
-            exit 1
-          fi
-
-          # Wait for Android boot completion.
-          BOOTED=0
+          adb wait-for-device
+          booted=0
           for attempt in $(seq 1 180); do
-            STATE="$(adb -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
-            if [[ "$STATE" == "1" ]]; then
-              BOOTED=1
-              break
-            fi
+            state="$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')"
+            if [[ "$state" == "1" ]]; then booted=1; break; fi
             sleep 2
           done
-
-          if [[ "$BOOTED" -ne 1 ]]; then
+          if [[ "$booted" -ne 1 ]]; then
             echo "::error::Android 16 emulator did not finish booting."
-            tail -n 200 "$RUNNER_TEMP/bastehyab-emulator.log" || true
-            adb devices -l || true
+            tail -n 120 "$RUNNER_TEMP/bastehyab-emulator.log" || true
             exit 1
           fi
-
-          echo "Android emulator boot completed successfully."
-          adb -s emulator-5554 shell getprop ro.build.version.release
-          adb -s emulator-5554 shell getprop ro.build.version.sdk
-
-          # Disable system animations and keyguard so Espresso/UiAutomator can reach idle.
-          adb -s emulator-5554 shell settings put global window_animation_scale 0.0   || true
-          adb -s emulator-5554 shell settings put global transition_animation_scale 0.0 || true
-          adb -s emulator-5554 shell settings put global animator_duration_scale 0.0   || true
-          adb -s emulator-5554 shell settings put system screen_off_timeout 2147483647 || true
-          adb -s emulator-5554 shell svc power stayon true   || true
-          adb -s emulator-5554 shell wm dismiss-keyguard     || true
-          adb -s emulator-5554 shell input keyevent 82       || true
-          adb -s emulator-5554 shell settings get global window_animation_scale     || true
-          adb -s emulator-5554 shell settings get global transition_animation_scale || true
-          adb -s emulator-5554 shell settings get global animator_duration_scale    || true
-
-          adb -s emulator-5554 logcat -c
-
-          # Hard wall-clock cap so this step can never hang forever.
-          set +e
-          timeout --signal=TERM --kill-after=60s 1500 \
-            ./gradlew --no-daemon --stacktrace --info \
-              :app:connectedDebugAndroidTest \
-            > "$RUNNER_TEMP/bastehyab-connected-test.log" 2>&1
-          GRADLE_STATUS=$?
-          set -e
-
-          tail -n 400 "$RUNNER_TEMP/bastehyab-connected-test.log" || true
-
-          if [[ "$GRADLE_STATUS" -ne 0 ]]; then
-            echo "::error::connectedDebugAndroidTest exited with $GRADLE_STATUS."
-            {
-              echo "## Android 16 instrumentation diagnostics"
-              echo '### adb devices'
-              adb devices -l || true
-              echo '### App process'
-              adb -s emulator-5554 shell ps -A | grep -i bastehyab || true
-              echo '### Instrumentation logcat (tail)'
-              adb -s emulator-5554 logcat -d | tail -n 400 || true
-              echo '### Emulator log (tail)'
-              tail -n 300 "$RUNNER_TEMP/bastehyab-emulator.log" || true
-            } >> "$GITHUB_STEP_SUMMARY"
-            adb -s emulator-5554 logcat -d \
-              > "$RUNNER_TEMP/bastehyab-instrumentation-logcat.txt" || true
-            exit "$GRADLE_STATUS"
-          fi
-
-          # Collect performance logs.
-          adb -s emulator-5554 logcat -d -s BastehyabBackdropPerf:I \
-            > "$RUNNER_TEMP/bastehyab-backdrop-performance.log"
-
+          adb logcat -c
+          ./gradlew --no-daemon --stacktrace :app:connectedDebugAndroidTest
+          adb logcat -d -s BastehyabBackdropPerf:I > "$RUNNER_TEMP/bastehyab-backdrop-performance.log"
           if [[ -s "$RUNNER_TEMP/bastehyab-backdrop-performance.log" ]]; then
             cat "$RUNNER_TEMP/bastehyab-backdrop-performance.log"
             {
@@ -449,18 +186,6 @@ jobs:
             dist/Bastehyab-Debug.apk
             dist/Bastehyab-Debug-SHA256.txt
           if-no-files-found: error
-          retention-days: 14
-
-      - name: Upload instrumentation diagnostics
-        if: failure()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: bastehyab-instrumentation-diagnostics-${{ github.run_id }}
-          path: |
-            ${{ runner.temp }}/bastehyab-connected-test.log
-            ${{ runner.temp }}/bastehyab-instrumentation-logcat.txt
-            ${{ runner.temp }}/bastehyab-emulator.log
-          if-no-files-found: ignore
           retention-days: 14
 
       - name: CI summary
@@ -547,32 +272,6 @@ jobs:
         with:
           ref: ${{ github.sha }}
 
-      - name: Extract the committed Android source archive into workspace root
-        shell: bash
-        run: |
-          set -euo pipefail
-          mapfile -t archives < <(git ls-files '*.zip')
-          if [[ "${#archives[@]}" -ne 1 ]]; then
-            echo "::error::Expected exactly one committed Android source ZIP; found ${#archives[@]}"
-            exit 1
-          fi
-          extract_dir="$RUNNER_TEMP/bastehyab-source"
-          rm -rf "$extract_dir"
-          mkdir -p "$extract_dir"
-          unzip -q "${archives[0]}" -d "$extract_dir"
-          mapfile -t settings_files < <(find "$extract_dir" -type f -name settings.gradle -not -path '*/__MACOSX/*')
-          if [[ "${#settings_files[@]}" -ne 1 ]]; then
-            echo "::error::Expected exactly one settings.gradle inside the source ZIP; found ${#settings_files[@]}"
-            exit 1
-          fi
-          project_dir="$(dirname "${settings_files[0]}")"
-          cp -a "$project_dir/." "$GITHUB_WORKSPACE/"
-          test -f "$GITHUB_WORKSPACE/settings.gradle"
-          test -f "$GITHUB_WORKSPACE/build.gradle"
-          test -f "$GITHUB_WORKSPACE/app/build.gradle"
-          test -f "$GITHUB_WORKSPACE/version.properties"
-          echo "Extracted Android project from ${archives[0]} into $GITHUB_WORKSPACE"
-
       - name: Setup Java 17
         uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
         with:
@@ -603,68 +302,6 @@ jobs:
             "build-tools;36.0.0" \
             "emulator" \
             "system-images;android-36;google_apis;x86_64"
-
-      - name: Install Android emulator Linux dependencies (release job)
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y libpulse0 libnss3 libx11-6 libx11-xcb1 libxcb1 libxcomposite1 libxcursor1 libxi6 libxrandr2 libxdamage1 libxfixes3 libxrender1 libxtst6 libdbus-1-3 libfontconfig1
-          if apt-cache show libasound2t64 >/dev/null 2>&1; then
-            sudo apt-get install -y libasound2t64
-          elif apt-cache show libasound2 >/dev/null 2>&1; then
-            sudo apt-get install -y libasound2
-          fi
-          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
-          if [[ -z "$SDK_ROOT" || ! -x "$SDK_ROOT/emulator/emulator" ]]; then
-            echo "::error::Android emulator executable was not found under ${SDK_ROOT:-<SDK root unset>}"
-            echo "SDK environment: ANDROID_HOME=${ANDROID_HOME:-unset}; ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-unset}"
-            exit 1
-          fi
-          echo "$SDK_ROOT/emulator" >> "$GITHUB_PATH"
-          echo "$SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
-          echo "$SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
-          # Android Emulator ships its own shared libraries inside the SDK.
-          # Discover every directory containing shared objects and expose them
-          # both to this step and to all following workflow steps.
-          EMULATOR_LIB_DIRS="$(find -L "$SDK_ROOT/emulator" -type f \
-            \( -name '*.so' -o -name '*.so.*' \) -printf '%h\n' 2>/dev/null | sort -u | paste -sd: -)"
-          export LD_LIBRARY_PATH="$SDK_ROOT/emulator:$SDK_ROOT/emulator/lib64:$SDK_ROOT/emulator/lib64/qt/lib:$SDK_ROOT/emulator/qemu/linux-x86_64${EMULATOR_LIB_DIRS:+:$EMULATOR_LIB_DIRS}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-          echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
-          echo "Android Emulator library directories: $EMULATOR_LIB_DIRS"
-
-          QEMU="$(find -L "$SDK_ROOT/emulator" -name 'qemu-system-x86_64' -print -quit 2>/dev/null || true)"
-          if [[ -n "$QEMU" ]]; then
-            echo "Found QEMU: $QEMU"
-            ldd "$QEMU" | tee "$RUNNER_TEMP/emulator-qemu-ldd.txt"
-            if grep -q 'not found' "$RUNNER_TEMP/emulator-qemu-ldd.txt"; then
-              echo "::error::QEMU still has unresolved shared-library dependencies after adding the SDK library paths."
-              echo "SDK emulator library files (first 150):"
-              find -L "$SDK_ROOT/emulator" -type f \( -name '*.so' -o -name '*.so.*' \) -print | head -n 150 || true
-              exit 1
-            fi
-          else
-            echo "QEMU binary was not located by filename; emulator version check follows."
-            find -L "$SDK_ROOT/emulator" -maxdepth 5 -type f -print | head -n 100 || true
-          fi
-          "$SDK_ROOT/emulator/emulator" -version
-
-      - name: Enable KVM access for Android Emulator (release job)
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          if [[ ! -e /dev/kvm ]]; then
-            echo "::error::/dev/kvm does not exist on this runner; Android x86_64 emulator cannot run without KVM."
-            exit 1
-          fi
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
-            | sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null
-          sudo udevadm control --reload-rules || true
-          sudo udevadm trigger --name-match=kvm || true
-          sudo chmod 666 /dev/kvm || true
-          ls -l /dev/kvm
-          id
-          grep '^kvm:' /etc/group || true
 
       - name: Validate version, imported published baseline and prior release
         id: release-meta
@@ -861,7 +498,7 @@ jobs:
             exit 0
           fi
           BUILD_TOOLS="${ANDROID_HOME:-${ANDROID_SDK_ROOT}}/build-tools/36.0.0"
-          PREVIOUS_CODE="$("$BUILD_TOOLS/aapt" dump badging "$PREVIOUS_APK" | sed -n "s/.*versionCode='\([0-9][0-9]*\)'.*/\1/p" | head -n 1)"
+          PREVIOUS_CODE="$("$BUILD_TOOLS/aapt" dump badging "$PREVIOUS_APK" | sed -n "s/.*versionCode='\\([0-9][0-9]*\\)'.*/\\1/p" | head -n 1)"
           CURRENT_CODE="${{ steps.release-meta.outputs.version_code }}"
           [[ -n "$PREVIOUS_CODE" && "$CURRENT_CODE" -gt "$PREVIOUS_CODE" ]]
           "$BUILD_TOOLS/apksigner" verify --print-certs "$PREVIOUS_APK" > "$RUNNER_TEMP/previous-signer.txt"
@@ -874,12 +511,11 @@ jobs:
           echo "Previous release $PREVIOUS_TAG code $PREVIOUS_CODE and signing certificate match." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Install and upgrade-test on Android 16 emulator
-        timeout-minutes: 20
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
-          set -Eeuo pipefail
+          set -euo pipefail
           PREVIOUS_TAG="${{ steps.release-meta.outputs.previous_tag }}"
           mkdir -p "$RUNNER_TEMP/previous-release"
           if [[ -n "$PREVIOUS_TAG" ]]; then
@@ -888,67 +524,25 @@ jobs:
             cp "$RUNNER_TEMP/published-baseline/Bastehyab-Published-Baseline.apk" \
               "$RUNNER_TEMP/previous-release/Bastehyab-Release.apk"
           fi
-
-          # Confirm KVM access is usable before starting the emulator.
-          if [[ ! -e /dev/kvm || ! -r /dev/kvm || ! -w /dev/kvm ]]; then
-            echo "::error::/dev/kvm is not accessible; Android x86_64 emulation requires KVM."
-            ls -l /dev/kvm || true
-            exit 1
-          fi
-
-          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
-          export PATH="$SDK_ROOT/emulator:$SDK_ROOT/platform-tools:$SDK_ROOT/cmdline-tools/latest/bin:$PATH"
-
-          export ANDROID_USER_HOME="$RUNNER_TEMP/android-release-user-home"
-          export ANDROID_AVD_HOME="$ANDROID_USER_HOME/avd"
-          mkdir -p "$ANDROID_AVD_HOME"
-
-          AVD_NAME="bastehyab-release-api36"
-          AVD_PATH="$ANDROID_AVD_HOME/$AVD_NAME.avd"
-          AVD_INI="$ANDROID_AVD_HOME/$AVD_NAME.ini"
-          rm -rf "$AVD_PATH" "$AVD_INI"
-
-          printf 'no\n' | avdmanager create avd \
-            --force \
-            --name "$AVD_NAME" \
-            --package "system-images;android-36;google_apis;x86_64" \
-            --device "pixel_2" \
-            --path "$AVD_PATH"
-
-          if [[ ! -f "$AVD_INI" || ! -f "$AVD_PATH/config.ini" ]]; then
-            echo "::error::AVD creation did not produce the expected configuration files."
-            find "$ANDROID_AVD_HOME" -maxdepth 3 -type f -print || true
-            avdmanager list avd || true
-            exit 1
-          fi
-
-          emulator -avd "$AVD_NAME" -port 5554 -no-window -no-audio -no-boot-anim \
-            -no-snapshot -wipe-data -gpu swiftshader_indirect -memory 3072 -cores 4 \
+          echo "no" | avdmanager create avd --force --name bastehyab-release-api36 \
+            --package "system-images;android-36;google_apis;x86_64" --device "pixel_2"
+          emulator -avd bastehyab-release-api36 -no-window -no-audio -no-boot-anim \
+            -no-snapshot -wipe-data -gpu swiftshader_indirect -memory 2048 \
             > "$RUNNER_TEMP/bastehyab-release-emulator.log" 2>&1 &
           EMULATOR_PID=$!
           cleanup_emulator() { adb emu kill >/dev/null 2>&1 || true; kill "$EMULATOR_PID" >/dev/null 2>&1 || true; }
           trap cleanup_emulator EXIT
-          if ! timeout 180s adb -s emulator-5554 wait-for-device; then
-            echo "::error::Release emulator did not become available through ADB."
-            tail -n 200 "$RUNNER_TEMP/bastehyab-release-emulator.log" || true
-            adb devices -l || true
-            exit 1
-          fi
+          adb wait-for-device
           booted=0
           for attempt in $(seq 1 180); do
-            if [[ "$(adb -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" == "1" ]]; then booted=1; break; fi
+            if [[ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" == "1" ]]; then booted=1; break; fi
             sleep 2
           done
-          if [[ "$booted" -ne 1 ]]; then
-            echo "::error::Release emulator did not finish booting."
-            tail -n 200 "$RUNNER_TEMP/bastehyab-release-emulator.log" || true
-            adb devices -l || true
-            exit 1
-          fi
-          adb -s emulator-5554 install "$RUNNER_TEMP/previous-release/Bastehyab-Release.apk"
-          adb -s emulator-5554 install -r "$GITHUB_WORKSPACE/dist/Bastehyab-Release.apk"
-          adb -s emulator-5554 shell monkey -p app.bastehyab 1 >/dev/null
-          adb -s emulator-5554 shell dumpsys package app.bastehyab | grep -q "versionCode=${{ steps.release-meta.outputs.version_code }}"
+          [[ "$booted" -eq 1 ]]
+          adb install "$RUNNER_TEMP/previous-release/Bastehyab-Release.apk"
+          adb install -r "$GITHUB_WORKSPACE/dist/Bastehyab-Release.apk"
+          adb shell monkey -p app.bastehyab 1 >/dev/null
+          adb shell dumpsys package app.bastehyab | grep -q "versionCode=${{ steps.release-meta.outputs.version_code }}"
           echo "Install + in-place upgrade passed on API 36." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Generate notes from canonical CHANGELOG section
