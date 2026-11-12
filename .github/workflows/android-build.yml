@@ -210,34 +210,37 @@ jobs:
           echo "BH_VERSION_CODE=$VERSION_CODE" >> "$GITHUB_ENV"
           echo "Release versionCode: $VERSION_CODE"
 
-      - name: Validate versionCode against latest published release
+      - name: Validate versionCode against earlier releases
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
-          latest_tag="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name 2>/dev/null || true)"
-          if [ -z "$latest_tag" ]; then
-            echo "No earlier release found; versionCode baseline accepted."
-            exit 0
-          fi
           prev_dir="$RUNNER_TEMP/previous-release"
           mkdir -p "$prev_dir"
-          if ! gh release download "$latest_tag" --pattern 'Bastehyab-Release.apk' --dir "$prev_dir"; then
-            echo "::error::Could not download the latest published APK."
-            exit 1
+          found=""
+          for tag in $(gh release list --repo "$GITHUB_REPOSITORY" --limit 50 --json tagName --jq '.[].tagName'); do
+            if gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern 'Bastehyab-Release.apk' --dir "$prev_dir" --clobber >/dev/null 2>&1; then
+              found="$tag"
+              break
+            fi
+          done
+          if [ -z "$found" ]; then
+            echo "::warning::No earlier release contains Bastehyab-Release.apk; versionCode comparison skipped."
+            echo "Versioncode comparison skipped (no earlier APK asset found)." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
           fi
           aapt_bin="${ANDROID_HOME}/build-tools/34.0.0/aapt"
           prev_code="$("$aapt_bin" dump badging "$prev_dir/Bastehyab-Release.apk" | grep -o "versionCode='[0-9]*'" | head -n 1 | grep -o '[0-9]*')"
           if [ -z "$prev_code" ]; then
-            echo "::error::Could not read previous Release versionCode."
+            echo "::error::Could not read versionCode from $found."
             exit 1
           fi
           if [ "$BH_VERSION_CODE" -le "$prev_code" ]; then
-            echo "::error::New versionCode ($BH_VERSION_CODE) must exceed published ($prev_code)."
+            echo "::error::New versionCode ($BH_VERSION_CODE) must exceed published ($prev_code) from $found."
             exit 1
           fi
-          echo "Published code $prev_code -> candidate $BH_VERSION_CODE" >> "$GITHUB_STEP_SUMMARY"
+          echo "Published code $prev_code ($found) -> candidate $BH_VERSION_CODE" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Validate signing secrets
         env:
@@ -270,7 +273,7 @@ jobs:
           printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$keystore_path"
           test -s "$keystore_path"
           chmod 600 "$keystore_path"
-          props="$GITHUB_WORKSPACE/_src/$PROJECT_DIR/keystore.properties"
+          props="$PROJECT_DIR/keystore.properties"
           {
             printf 'storeFile=%s\n' "$keystore_path"
             printf 'storePassword=%s\n' "$KEYSTORE_PASSWORD"
@@ -283,7 +286,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cd "$GITHUB_WORKSPACE/_src/$PROJECT_DIR"
+          cd "$PROJECT_DIR"
           test -s keystore.properties
           gradle --no-daemon --stacktrace clean :app:assembleRelease
           APK="$(find app/build/outputs/apk/release -type f -name '*.apk' -print -quit)"
@@ -318,11 +321,12 @@ jobs:
             echo "- APK با کلید انتشار پروژه امضا و با apksigner بررسی شده است."
             echo "- خروجی Debug برای نصب به‌عنوان به‌روزرسانی Release مناسب نیست."
           } > "$notes"
-          if gh release view "$tag" >/dev/null 2>&1; then
-            gh release upload "$tag" "$apk" "$GITHUB_WORKSPACE/dist/SHA256.txt" --clobber
-            gh release edit "$tag" --title "Bastehyab 1.9.0 build ${GITHUB_RUN_NUMBER}" --notes-file "$notes"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$tag" "$apk" "$GITHUB_WORKSPACE/dist/SHA256.txt" --repo "$GITHUB_REPOSITORY" --clobber
+            gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --title "Bastehyab 1.9.0 build ${GITHUB_RUN_NUMBER}" --notes-file "$notes"
           else
             gh release create "$tag" "$apk" "$GITHUB_WORKSPACE/dist/SHA256.txt" \
+              --repo "$GITHUB_REPOSITORY" \
               --title "Bastehyab 1.9.0 build ${GITHUB_RUN_NUMBER}" \
               --notes-file "$notes"
           fi
@@ -331,5 +335,5 @@ jobs:
         if: always()
         shell: bash
         run: |
-          rm -f "$GITHUB_WORKSPACE/_src/$PROJECT_DIR/keystore.properties" || true
+          rm -f "$PROJECT_DIR/keystore.properties" || true
           rm -f "$RUNNER_TEMP/bastehyab-release.jks" || true
