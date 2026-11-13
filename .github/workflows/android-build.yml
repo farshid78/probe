@@ -1,4 +1,4 @@
-name: Bastehyab APK Build Only
+name: Bastehyab APK Build and Publish Release
 
 on:
   push:
@@ -116,16 +116,6 @@ jobs:
 
           echo "version_name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
 
-      - name: Upload APK artifact
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: Bastehyab-Debug-${{ steps.apk.outputs.version_name }}-${{ github.run_number }}
-          path: |
-            dist/Bastehyab-Debug.apk
-            dist/Bastehyab-Debug-SHA256.txt
-          if-no-files-found: error
-          retention-days: 14
-
       - name: Publish APK to GitHub Releases
         id: release
         env:
@@ -155,10 +145,13 @@ jobs:
             --prerelease
 
           RELEASE_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$TAG"
-          echo "url=$RELEASE_URL" >> "$GITHUB_OUTPUT"
-          echo "### GitHub Release published" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Tag: \`$TAG\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- APK: [Download Bastehyab-Debug.apk]($RELEASE_URL)" >> "$GITHUB_STEP_SUMMARY"
+          echo "release_url=$RELEASE_URL" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Bastehyab APK Release"
+            echo "- Release: [$TAG]($RELEASE_URL)"
+            echo "- APK asset: Bastehyab-Debug.apk"
+            echo "- Checksum asset: Bastehyab-Debug-SHA256.txt"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Build summary
         if: always()
@@ -169,4 +162,5 @@ jobs:
             echo "- Build mode: Debug APK only"
             echo "- Automated tests: skipped"
             echo "- Android emulator: not used"
+            echo "- APK delivery: GitHub Releases (not Actions Artifacts)"
           } >> "$GITHUB_STEP_SUMMARY"
