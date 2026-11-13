@@ -883,7 +883,7 @@ jobs:
           PREVIOUS_TAG="${{ steps.release-meta.outputs.previous_tag }}"
           mkdir -p "$RUNNER_TEMP/previous-release"
           if [[ -n "$PREVIOUS_TAG" ]]; then
-            gh release download "$PREVIOUS_TAG" --pattern 'Bastehyab-Release.apk' --dir "$RUNNER_TEMP/previous-release"
+            gh release download "$PREVIOUS_TAG" --pattern 'Bastehyab-Release.apk' --dir "$RUNNER_TEMP/previous-release" --clobber
           else
             cp "$RUNNER_TEMP/published-baseline/Bastehyab-Published-Baseline.apk" \
               "$RUNNER_TEMP/previous-release/Bastehyab-Release.apk"
