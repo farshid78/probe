@@ -1,61 +1,62 @@
-name: Bastehyab Android CI and Release
+name: Bastehyab APK Build Only
 
 on:
   push:
     branches:
-      - '**'
-    tags:
-      - 'v*'
+      - main
+      - master
   workflow_dispatch:
-    inputs:
-      release_version:
-        description: 'Canonical VERSION_NAME to release (must match version.properties)'
-        required: true
-        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: bastehyab-${{ github.workflow }}-${{ github.ref }}
+  group: bastehyab-apk-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  build-test:
-    name: Static checks, lint, unit tests and Debug build
+  build-apk:
+    name: Build Debug APK (no tests)
     runs-on: ubuntu-latest
-    timeout-minutes: 60
-    permissions:
-      contents: read
+    timeout-minutes: 45
+
     steps:
       - name: Checkout source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Extract the committed Android source archive into workspace root
+      - name: Extract Android source archive
         shell: bash
         run: |
           set -euo pipefail
+
           mapfile -t archives < <(git ls-files '*.zip')
           if [[ "${#archives[@]}" -ne 1 ]]; then
             echo "::error::Expected exactly one committed Android source ZIP; found ${#archives[@]}"
             exit 1
           fi
+
           extract_dir="$RUNNER_TEMP/bastehyab-source"
           rm -rf "$extract_dir"
           mkdir -p "$extract_dir"
           unzip -q "${archives[0]}" -d "$extract_dir"
-          mapfile -t settings_files < <(find "$extract_dir" -type f -name settings.gradle -not -path '*/__MACOSX/*')
+
+          mapfile -t settings_files < <(
+            find "$extract_dir" -type f -name settings.gradle -not -path '*/__MACOSX/*'
+          )
           if [[ "${#settings_files[@]}" -ne 1 ]]; then
             echo "::error::Expected exactly one settings.gradle inside the source ZIP; found ${#settings_files[@]}"
             exit 1
           fi
+
           project_dir="$(dirname "${settings_files[0]}")"
           cp -a "$project_dir/." "$GITHUB_WORKSPACE/"
-          test -f "$GITHUB_WORKSPACE/settings.gradle"
-          test -f "$GITHUB_WORKSPACE/build.gradle"
-          test -f "$GITHUB_WORKSPACE/app/build.gradle"
-          test -f "$GITHUB_WORKSPACE/version.properties"
-          echo "Extracted Android project from ${archives[0]} into $GITHUB_WORKSPACE"
+
+          test -f settings.gradle
+          test -f build.gradle
+          test -f app/build.gradle
+          test -f version.properties
+
+          echo "Extracted Android project from ${archives[0]}"
 
       - name: Setup Java 17
         uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
@@ -63,35 +64,22 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Gradle 8.13 bootstrap distribution
+      - name: Setup Gradle 8.13
         uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
         with:
           gradle-version: '8.13'
           cache-provider: basic
 
-      - name: Generate and verify official Gradle Wrapper
+      - name: Generate Gradle Wrapper
         shell: bash
         run: |
           set -euo pipefail
           bash tools/release/bootstrap-wrapper.sh
 
-      - name: Export wrapper bootstrap artifact for repository commit
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: bastehyab-gradle-wrapper-8.13
-          path: |
-            gradlew
-            gradlew.bat
-            gradle/wrapper/gradle-wrapper.jar
-            gradle/wrapper/gradle-wrapper.jar.sha256
-            gradle/wrapper/gradle-wrapper.properties
-          if-no-files-found: error
-          retention-days: 7
-
       - name: Setup Android SDK 36
         uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
 
-      - name: Install Android 16 SDK and emulator
+      - name: Install Android build tools
         shell: bash
         run: |
           set -euo pipefail
@@ -99,899 +87,52 @@ jobs:
           sdkmanager --install \
             "platform-tools" \
             "platforms;android-36" \
-            "build-tools;36.0.0" \
-            "emulator" \
-            "system-images;android-36;google_apis;x86_64"
+            "build-tools;36.0.0"
 
-      - name: Install Android emulator Linux dependencies
+      - name: Build Debug APK only
         shell: bash
         run: |
           set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y libpulse0 libnss3 libx11-6 libx11-xcb1 libxcb1 libxcomposite1 libxcursor1 libxi6 libxrandr2 libxdamage1 libxfixes3 libxrender1 libxtst6 libdbus-1-3 libfontconfig1
-          if apt-cache show libasound2t64 >/dev/null 2>&1; then
-            sudo apt-get install -y libasound2t64
-          elif apt-cache show libasound2 >/dev/null 2>&1; then
-            sudo apt-get install -y libasound2
-          fi
-          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
-          if [[ -z "$SDK_ROOT" || ! -x "$SDK_ROOT/emulator/emulator" ]]; then
-            echo "::error::Android emulator executable was not found under ${SDK_ROOT:-<SDK root unset>}"
-            echo "SDK environment: ANDROID_HOME=${ANDROID_HOME:-unset}; ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-unset}"
-            exit 1
-          fi
-          echo "$SDK_ROOT/emulator" >> "$GITHUB_PATH"
-          echo "$SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
-          echo "$SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
-          # Android Emulator ships its own shared libraries inside the SDK.
-          # Discover every directory containing shared objects and expose them
-          # both to this step and to all following workflow steps.
-          EMULATOR_LIB_DIRS="$(find -L "$SDK_ROOT/emulator" -type f \
-            \( -name '*.so' -o -name '*.so.*' \) -printf '%h\n' 2>/dev/null | sort -u | paste -sd: -)"
-          export LD_LIBRARY_PATH="$SDK_ROOT/emulator:$SDK_ROOT/emulator/lib64:$SDK_ROOT/emulator/lib64/qt/lib:$SDK_ROOT/emulator/qemu/linux-x86_64${EMULATOR_LIB_DIRS:+:$EMULATOR_LIB_DIRS}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-          echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
-          echo "Android Emulator library directories: $EMULATOR_LIB_DIRS"
+          ./gradlew --no-daemon --stacktrace :app:assembleDebug
 
-          QEMU="$(find -L "$SDK_ROOT/emulator" -name 'qemu-system-x86_64' -print -quit 2>/dev/null || true)"
-          if [[ -n "$QEMU" ]]; then
-            echo "Found QEMU: $QEMU"
-            ldd "$QEMU" | tee "$RUNNER_TEMP/emulator-qemu-ldd.txt"
-            if grep -q 'not found' "$RUNNER_TEMP/emulator-qemu-ldd.txt"; then
-              echo "::error::QEMU still has unresolved shared-library dependencies after adding the SDK library paths."
-              echo "SDK emulator library files (first 150):"
-              find -L "$SDK_ROOT/emulator" -type f \( -name '*.so' -o -name '*.so.*' \) -print | head -n 150 || true
-              exit 1
-            fi
-          else
-            echo "QEMU binary was not located by filename; emulator version check follows."
-            find -L "$SDK_ROOT/emulator" -maxdepth 5 -type f -print | head -n 100 || true
-          fi
-          "$SDK_ROOT/emulator/emulator" -version
-
-      - name: Enable KVM access for Android Emulator
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          if [[ ! -e /dev/kvm ]]; then
-            echo "::error::/dev/kvm does not exist on this runner; Android x86_64 emulator cannot run without KVM."
-            exit 1
-          fi
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
-            | sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null
-          sudo udevadm control --reload-rules || true
-          sudo udevadm trigger --name-match=kvm || true
-          # Guarantee access for the current user without needing re-login.
-          sudo chmod 666 /dev/kvm || true
-          ls -l /dev/kvm
-          id
-          grep '^kvm:' /etc/group || true
-
-      - name: Validate canonical version and release trigger
-        id: version
-        env:
-          RELEASE_VERSION_INPUT: ${{ inputs.release_version }}
+      - name: Collect APK and checksum
+        id: apk
         shell: bash
         run: |
           set -euo pipefail
-          python3 tools/release/validate-release-metadata.py
-          VERSION_NAME="$(sed -n 's/^VERSION_NAME=//p' version.properties)"
-          VERSION_CODE="$(sed -n 's/^VERSION_CODE=//p' version.properties)"
-          if [[ "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_REF" == refs/tags/* ]]; then
-            python3 tools/release/validate-release-metadata.py "$GITHUB_REF_NAME"
-          elif [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
-            if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
-              echo "::error::Manual releases may only be dispatched from main."
-              exit 1
-            fi
-            if [[ "$RELEASE_VERSION_INPUT" != "$VERSION_NAME" ]]; then
-              echo "::error::Manual release input must equal canonical VERSION_NAME ($VERSION_NAME)."
-              exit 1
-            fi
-          fi
-          if (( VERSION_CODE > 2100000000 || VERSION_CODE < 1 )); then
-            echo "::error::VERSION_CODE is outside Android's supported range."
-            exit 1
-          fi
-          echo "version_name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
-          echo "version_code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
 
-      - name: Run project smoke tests
-        shell: bash
-        run: |
-          set -euo pipefail
-          bash tools/fixture-sanitizer/test.sh
-          bash tools/parser-smoke-tests/run.sh
-          bash tools/android-core-smoke-tests/run.sh
-          bash tools/popup-overlay-smoke-tests/run.sh
-          bash tools/ui-layout-smoke-tests/run.sh
-          bash tools/android-core-smoke-tests/check-accessibility-api.sh
-          python3 tools/backdrop-instrumentation-tests/static-review.py
-          python3 tools/release/validate-release-metadata.py
-
-      - name: Android Lint, unit tests and Debug APK
-        shell: bash
-        run: |
-          set -euo pipefail
-          ./gradlew --no-daemon --stacktrace \
-            :app:lintDebug \
-            :app:testDebugUnitTest \
-            :app:assembleDebug
-
-      - name: Run Android 16 instrumentation suite
-        timeout-minutes: 30
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-
-          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
-          if [[ -z "$SDK_ROOT" ]]; then
-            echo "::error::Android SDK root is not configured."
-            exit 1
-          fi
-
-          export PATH="$SDK_ROOT/emulator:$SDK_ROOT/platform-tools:$SDK_ROOT/cmdline-tools/latest/bin:$PATH"
-
-          # Use an explicit, isolated AVD directory.
-          export ANDROID_USER_HOME="$RUNNER_TEMP/android-user-home"
-          export ANDROID_AVD_HOME="$ANDROID_USER_HOME/avd"
-          mkdir -p "$ANDROID_AVD_HOME"
-
-          AVD_NAME="bastehyab-api36"
-          AVD_PATH="$ANDROID_AVD_HOME/$AVD_NAME.avd"
-          AVD_INI="$ANDROID_AVD_HOME/$AVD_NAME.ini"
-
-          echo "Android SDK: $SDK_ROOT"
-          echo "Android AVD home: $ANDROID_AVD_HOME"
-
-          if [[ ! -x "$SDK_ROOT/emulator/emulator" ]]; then
-            echo "::error::Android emulator executable is missing."
-            exit 1
-          fi
-
-          if ! command -v avdmanager >/dev/null 2>&1; then
-            echo "::error::avdmanager was not found."
-            exit 1
-          fi
-
-          if ! command -v adb >/dev/null 2>&1; then
-            echo "::error::adb was not found."
-            exit 1
-          fi
-
-          # Verify KVM is really usable; x86_64 emulation requires it.
-          if [[ ! -e /dev/kvm ]]; then
-            echo "::error::/dev/kvm does not exist; Android x86_64 emulation requires KVM."
-            exit 1
-          fi
-          if [[ ! -r /dev/kvm || ! -w /dev/kvm ]]; then
-            echo "::error::/dev/kvm is not readable/writable by the current user."
-            ls -l /dev/kvm || true
-            exit 1
-          fi
-          echo "KVM device permissions:"
-          ls -l /dev/kvm
-
-          # Verify that the requested Android 16 system image is installed.
-          if ! sdkmanager --list_installed | grep -Fq \
-            "system-images;android-36;google_apis;x86_64"; then
-            echo "::error::Android 36 Google APIs x86_64 system image is not installed."
-            exit 1
-          fi
-
-          # Remove any incomplete AVD left by an earlier attempt.
-          rm -rf "$AVD_PATH" "$AVD_INI"
-
-          # Create the AVD at an explicit path instead of relying on HOME defaults.
-          set +e
-          printf 'no\n' | avdmanager create avd \
-            --force \
-            --name "$AVD_NAME" \
-            --package "system-images;android-36;google_apis;x86_64" \
-            --device "pixel_2" \
-            --path "$AVD_PATH"
-          AVD_CREATE_STATUS=$?
-          set -e
-
-          if [[ "$AVD_CREATE_STATUS" -ne 0 ]]; then
-            echo "::error::avdmanager failed to create the AVD (exit $AVD_CREATE_STATUS)."
-            avdmanager list device || true
-            find "$ANDROID_AVD_HOME" -maxdepth 3 -type f -print || true
-            exit 1
-          fi
-
-          # Confirm that both AVD configuration files really exist.
-          if [[ ! -f "$AVD_INI" || ! -f "$AVD_PATH/config.ini" ]]; then
-            echo "::error::AVD creation did not produce the expected configuration files."
-            echo "Expected: $AVD_INI"
-            echo "Expected: $AVD_PATH/config.ini"
-            find "$ANDROID_AVD_HOME" -maxdepth 3 -type f -print || true
-            avdmanager list avd || true
-            exit 1
-          fi
-
-          echo "Created AVD successfully:"
-          avdmanager list avd
-
-          # Confirm that the emulator can resolve this exact AVD name.
-          if ! emulator -list-avds | grep -Fxq "$AVD_NAME"; then
-            echo "::error::Emulator cannot find the newly created AVD."
-            emulator -list-avds || true
-            exit 1
-          fi
-
-          adb start-server
-          adb kill-server || true
-          adb start-server
-
-          # Start the emulator. More cores so swiftshader is not the bottleneck.
-          emulator -avd "$AVD_NAME" \
-            -port 5554 \
-            -no-window \
-            -no-audio \
-            -no-boot-anim \
-            -no-snapshot \
-            -wipe-data \
-            -gpu swiftshader_indirect \
-            -memory 3072 \
-            -cores 4 \
-            > "$RUNNER_TEMP/bastehyab-emulator.log" 2>&1 &
-
-          EMULATOR_PID=$!
-
-          cleanup_emulator() {
-            adb emu kill >/dev/null 2>&1 || true
-            kill "$EMULATOR_PID" >/dev/null 2>&1 || true
-          }
-          trap cleanup_emulator EXIT
-
-          # Wait for the emulator to register with ADB.
-          if ! timeout 180s adb -s emulator-5554 wait-for-device; then
-            echo "::error::Emulator did not become available through ADB."
-            tail -n 200 "$RUNNER_TEMP/bastehyab-emulator.log" || true
-            adb devices -l || true
-            exit 1
-          fi
-
-          # Wait for Android boot completion.
-          BOOTED=0
-          for attempt in $(seq 1 180); do
-            STATE="$(adb -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
-            if [[ "$STATE" == "1" ]]; then
-              BOOTED=1
-              break
-            fi
-            sleep 2
-          done
-
-          if [[ "$BOOTED" -ne 1 ]]; then
-            echo "::error::Android 16 emulator did not finish booting."
-            tail -n 200 "$RUNNER_TEMP/bastehyab-emulator.log" || true
-            adb devices -l || true
-            exit 1
-          fi
-
-          echo "Android emulator boot completed successfully."
-          adb -s emulator-5554 shell getprop ro.build.version.release
-          adb -s emulator-5554 shell getprop ro.build.version.sdk
-
-          # Disable system animations and keyguard so Espresso/UiAutomator can reach idle.
-          adb -s emulator-5554 shell settings put global window_animation_scale 0.0   || true
-          adb -s emulator-5554 shell settings put global transition_animation_scale 0.0 || true
-          adb -s emulator-5554 shell settings put global animator_duration_scale 0.0   || true
-          adb -s emulator-5554 shell settings put system screen_off_timeout 2147483647 || true
-          adb -s emulator-5554 shell svc power stayon true   || true
-          adb -s emulator-5554 shell wm dismiss-keyguard     || true
-          adb -s emulator-5554 shell input keyevent 82       || true
-          adb -s emulator-5554 shell settings get global window_animation_scale     || true
-          adb -s emulator-5554 shell settings get global transition_animation_scale || true
-          adb -s emulator-5554 shell settings get global animator_duration_scale    || true
-
-          adb -s emulator-5554 logcat -c
-
-          # Hard wall-clock cap so this step can never hang forever.
-          set +e
-          timeout --signal=TERM --kill-after=60s 1500 \
-            ./gradlew --no-daemon --stacktrace --info \
-              :app:connectedDebugAndroidTest \
-            > "$RUNNER_TEMP/bastehyab-connected-test.log" 2>&1
-          GRADLE_STATUS=$?
-          set -e
-
-          tail -n 400 "$RUNNER_TEMP/bastehyab-connected-test.log" || true
-
-          if [[ "$GRADLE_STATUS" -ne 0 ]]; then
-            echo "::error::connectedDebugAndroidTest exited with $GRADLE_STATUS."
-            {
-              echo "## Android 16 instrumentation diagnostics"
-              echo '### adb devices'
-              adb devices -l || true
-              echo '### App process'
-              adb -s emulator-5554 shell ps -A | grep -i bastehyab || true
-              echo '### Instrumentation logcat (tail)'
-              adb -s emulator-5554 logcat -d | tail -n 400 || true
-              echo '### Emulator log (tail)'
-              tail -n 300 "$RUNNER_TEMP/bastehyab-emulator.log" || true
-            } >> "$GITHUB_STEP_SUMMARY"
-            adb -s emulator-5554 logcat -d \
-              > "$RUNNER_TEMP/bastehyab-instrumentation-logcat.txt" || true
-            exit "$GRADLE_STATUS"
-          fi
-
-          # Collect performance logs.
-          adb -s emulator-5554 logcat -d -s BastehyabBackdropPerf:I \
-            > "$RUNNER_TEMP/bastehyab-backdrop-performance.log"
-
-          if [[ -s "$RUNNER_TEMP/bastehyab-backdrop-performance.log" ]]; then
-            cat "$RUNNER_TEMP/bastehyab-backdrop-performance.log"
-            {
-              echo "## Android 16 backdrop FPS / CPU measurements"
-              cat "$RUNNER_TEMP/bastehyab-backdrop-performance.log"
-            } >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "::warning::No BastehyabBackdropPerf measurements were emitted."
-          fi
-
-      - name: Collect Debug APK and checksum
-        shell: bash
-        run: |
-          set -euo pipefail
           APK="$(find app/build/outputs/apk/debug -type f -name '*.apk' -print -quit)"
-          test -n "$APK"
+          if [[ -z "$APK" ]]; then
+            echo "::error::Debug APK was not generated."
+            exit 1
+          fi
+
+          VERSION_NAME="$(sed -n 's/^VERSION_NAME=//p' version.properties)"
+          test -n "$VERSION_NAME"
+
           mkdir -p dist
           cp "$APK" dist/Bastehyab-Debug.apk
           sha256sum dist/Bastehyab-Debug.apk > dist/Bastehyab-Debug-SHA256.txt
 
-      - name: Upload Debug artifact
+          echo "version_name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Upload APK artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: bastehyab-debug-${{ steps.version.outputs.version_name }}-${{ github.run_id }}
+          name: Bastehyab-Debug-${{ steps.apk.outputs.version_name }}-${{ github.run_number }}
           path: |
             dist/Bastehyab-Debug.apk
             dist/Bastehyab-Debug-SHA256.txt
           if-no-files-found: error
           retention-days: 14
 
-      - name: Upload instrumentation diagnostics
-        if: failure()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: bastehyab-instrumentation-diagnostics-${{ github.run_id }}
-          path: |
-            ${{ runner.temp }}/bastehyab-connected-test.log
-            ${{ runner.temp }}/bastehyab-instrumentation-logcat.txt
-            ${{ runner.temp }}/bastehyab-emulator.log
-          if-no-files-found: ignore
-          retention-days: 14
-
-      - name: CI summary
+      - name: Build summary
         if: always()
         shell: bash
         run: |
           {
-            echo "## Bastehyab CI"
-            echo "- Canonical version: ${VERSION_NAME:-$(sed -n 's/^VERSION_NAME=//p' version.properties)}"
-            echo "- Canonical versionCode: ${VERSION_CODE:-$(sed -n 's/^VERSION_CODE=//p' version.properties)}"
-            echo "- compileSdk / targetSdk: 36 / 36"
-            echo "- Android 16 instrumentation step: inspect its result above."
+            echo "## Bastehyab APK Build"
+            echo "- Build mode: Debug APK only"
+            echo "- Automated tests: skipped"
+            echo "- Android emulator: not used"
           } >> "$GITHUB_STEP_SUMMARY"
-
-  plan:
-    name: Decide whether this run publishes a release
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    outputs:
-      publish: ${{ steps.decide.outputs.publish }}
-    steps:
-      - name: Checkout source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Read canonical version from the committed source ZIP
-        id: read
-        shell: bash
-        run: |
-          set -euo pipefail
-          mapfile -t archives < <(git ls-files '*.zip')
-          if [[ "${#archives[@]}" -ne 1 ]]; then
-            echo "::error::Expected exactly one committed Android source ZIP; found ${#archives[@]}"
-            exit 1
-          fi
-          extract_dir="$RUNNER_TEMP/plan-source"
-          rm -rf "$extract_dir"
-          mkdir -p "$extract_dir"
-          unzip -q "${archives[0]}" -d "$extract_dir"
-          props="$(find "$extract_dir" -type f -name version.properties -not -path '*/__MACOSX/*' -print -quit)"
-          test -n "$props"
-          VERSION_NAME="$(sed -n 's/^VERSION_NAME=//p' "$props")"
-          test -n "$VERSION_NAME"
-          echo "version_name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
-
-      - name: Decide whether to publish
-        id: decide
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VERSION_NAME: ${{ steps.read.outputs.version_name }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          publish=false
-          if [[ "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_REF" == refs/tags/v* ]]; then
-            publish=true
-          elif [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
-            publish=true
-          elif [[ "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_REF" == "refs/heads/main" ]]; then
-            # A push to main publishes only when version.properties names a version with no release yet.
-            if gh release view "v$VERSION_NAME" >/dev/null 2>&1; then
-              echo "Release v$VERSION_NAME already exists; this push publishes nothing."
-            else
-              publish=true
-            fi
-          fi
-          echo "publish=$publish" >> "$GITHUB_OUTPUT"
-          echo "Publish decision: $publish (version $VERSION_NAME, event $GITHUB_EVENT_NAME, ref $GITHUB_REF)"
-
-  release:
-    name: Approved signed release
-    if: needs.plan.outputs.publish == 'true'
-    needs: [build-test, plan]
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    environment:
-      name: release
-    permissions:
-      contents: write
-    steps:
-      - name: Checkout source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-
-      - name: Extract the committed Android source archive into workspace root
-        shell: bash
-        run: |
-          set -euo pipefail
-          mapfile -t archives < <(git ls-files '*.zip')
-          if [[ "${#archives[@]}" -ne 1 ]]; then
-            echo "::error::Expected exactly one committed Android source ZIP; found ${#archives[@]}"
-            exit 1
-          fi
-          extract_dir="$RUNNER_TEMP/bastehyab-source"
-          rm -rf "$extract_dir"
-          mkdir -p "$extract_dir"
-          unzip -q "${archives[0]}" -d "$extract_dir"
-          mapfile -t settings_files < <(find "$extract_dir" -type f -name settings.gradle -not -path '*/__MACOSX/*')
-          if [[ "${#settings_files[@]}" -ne 1 ]]; then
-            echo "::error::Expected exactly one settings.gradle inside the source ZIP; found ${#settings_files[@]}"
-            exit 1
-          fi
-          project_dir="$(dirname "${settings_files[0]}")"
-          cp -a "$project_dir/." "$GITHUB_WORKSPACE/"
-          test -f "$GITHUB_WORKSPACE/settings.gradle"
-          test -f "$GITHUB_WORKSPACE/build.gradle"
-          test -f "$GITHUB_WORKSPACE/app/build.gradle"
-          test -f "$GITHUB_WORKSPACE/version.properties"
-          echo "Extracted Android project from ${archives[0]} into $GITHUB_WORKSPACE"
-
-      - name: Setup Java 17
-        uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
-        with:
-          distribution: temurin
-          java-version: '17'
-
-      - name: Setup Gradle 8.13 bootstrap distribution
-        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
-        with:
-          gradle-version: '8.13'
-          cache-provider: basic
-
-      - name: Generate and verify official Gradle Wrapper
-        shell: bash
-        run: bash tools/release/bootstrap-wrapper.sh
-
-      - name: Setup Android SDK 36
-        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
-
-      - name: Install Android 16 build and upgrade-test tools
-        shell: bash
-        run: |
-          set -euo pipefail
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager --install \
-            "platform-tools" \
-            "platforms;android-36" \
-            "build-tools;36.0.0" \
-            "emulator" \
-            "system-images;android-36;google_apis;x86_64"
-
-      - name: Install Android emulator Linux dependencies (release job)
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y libpulse0 libnss3 libx11-6 libx11-xcb1 libxcb1 libxcomposite1 libxcursor1 libxi6 libxrandr2 libxdamage1 libxfixes3 libxrender1 libxtst6 libdbus-1-3 libfontconfig1
-          if apt-cache show libasound2t64 >/dev/null 2>&1; then
-            sudo apt-get install -y libasound2t64
-          elif apt-cache show libasound2 >/dev/null 2>&1; then
-            sudo apt-get install -y libasound2
-          fi
-          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
-          if [[ -z "$SDK_ROOT" || ! -x "$SDK_ROOT/emulator/emulator" ]]; then
-            echo "::error::Android emulator executable was not found under ${SDK_ROOT:-<SDK root unset>}"
-            echo "SDK environment: ANDROID_HOME=${ANDROID_HOME:-unset}; ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-unset}"
-            exit 1
-          fi
-          echo "$SDK_ROOT/emulator" >> "$GITHUB_PATH"
-          echo "$SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
-          echo "$SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
-          # Android Emulator ships its own shared libraries inside the SDK.
-          # Discover every directory containing shared objects and expose them
-          # both to this step and to all following workflow steps.
-          EMULATOR_LIB_DIRS="$(find -L "$SDK_ROOT/emulator" -type f \
-            \( -name '*.so' -o -name '*.so.*' \) -printf '%h\n' 2>/dev/null | sort -u | paste -sd: -)"
-          export LD_LIBRARY_PATH="$SDK_ROOT/emulator:$SDK_ROOT/emulator/lib64:$SDK_ROOT/emulator/lib64/qt/lib:$SDK_ROOT/emulator/qemu/linux-x86_64${EMULATOR_LIB_DIRS:+:$EMULATOR_LIB_DIRS}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-          echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
-          echo "Android Emulator library directories: $EMULATOR_LIB_DIRS"
-
-          QEMU="$(find -L "$SDK_ROOT/emulator" -name 'qemu-system-x86_64' -print -quit 2>/dev/null || true)"
-          if [[ -n "$QEMU" ]]; then
-            echo "Found QEMU: $QEMU"
-            ldd "$QEMU" | tee "$RUNNER_TEMP/emulator-qemu-ldd.txt"
-            if grep -q 'not found' "$RUNNER_TEMP/emulator-qemu-ldd.txt"; then
-              echo "::error::QEMU still has unresolved shared-library dependencies after adding the SDK library paths."
-              echo "SDK emulator library files (first 150):"
-              find -L "$SDK_ROOT/emulator" -type f \( -name '*.so' -o -name '*.so.*' \) -print | head -n 150 || true
-              exit 1
-            fi
-          else
-            echo "QEMU binary was not located by filename; emulator version check follows."
-            find -L "$SDK_ROOT/emulator" -maxdepth 5 -type f -print | head -n 100 || true
-          fi
-          "$SDK_ROOT/emulator/emulator" -version
-
-      - name: Enable KVM access for Android Emulator (release job)
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          if [[ ! -e /dev/kvm ]]; then
-            echo "::error::/dev/kvm does not exist on this runner; Android x86_64 emulator cannot run without KVM."
-            exit 1
-          fi
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
-            | sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null
-          sudo udevadm control --reload-rules || true
-          sudo udevadm trigger --name-match=kvm || true
-          sudo chmod 666 /dev/kvm || true
-          ls -l /dev/kvm
-          id
-          grep '^kvm:' /etc/group || true
-
-      - name: Validate version, imported published baseline and prior release
-        id: release-meta
-        env:
-          RELEASE_VERSION_INPUT: ${{ inputs.release_version }}
-          PUBLISHED_VERSION_CODE_BASELINE: ${{ vars.PUBLISHED_VERSION_CODE_BASELINE }}
-          PUBLISHED_BASELINE_RELEASE_TAG: ${{ vars.PUBLISHED_BASELINE_RELEASE_TAG }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 tools/release/validate-release-metadata.py
-          VERSION_NAME="$(sed -n 's/^VERSION_NAME=//p' version.properties)"
-          VERSION_CODE="$(sed -n 's/^VERSION_CODE=//p' version.properties)"
-          TAG="v$VERSION_NAME"
-          if [[ "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_REF" == refs/tags/* ]]; then
-            python3 tools/release/validate-release-metadata.py "$GITHUB_REF_NAME"
-            TAG="$GITHUB_REF_NAME"
-          else
-            # Main push or manual dispatch: publish VERSION_NAME at this commit (tag is created with the release).
-            if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
-              echo "::error::Branch releases must run from main."
-              exit 1
-            fi
-            if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && "$RELEASE_VERSION_INPUT" != "$VERSION_NAME" ]]; then
-              echo "::error::Manual release must match VERSION_NAME."
-              exit 1
-            fi
-          fi
-          if [[ -z "${PUBLISHED_VERSION_CODE_BASELINE:-}" || ! "$PUBLISHED_VERSION_CODE_BASELINE" =~ ^[0-9]+$ ]]; then
-            echo "::error::Set repository variable PUBLISHED_VERSION_CODE_BASELINE to the largest published versionCode across Google Play and external stores."
-            exit 1
-          fi
-          if (( VERSION_CODE <= PUBLISHED_VERSION_CODE_BASELINE )); then
-            echo "::error::Candidate versionCode $VERSION_CODE must exceed imported published baseline $PUBLISHED_VERSION_CODE_BASELINE."
-            exit 1
-          fi
-          PREVIOUS_GITHUB_TAG="$(gh release list --limit 100 --json tagName,isDraft,isPrerelease \
-            --jq '[.[] | select(.isDraft == false and .isPrerelease == false and (.tagName | startswith("v")))][0].tagName // ""')"
-          if [[ -z "$PREVIOUS_GITHUB_TAG" && -z "${PUBLISHED_BASELINE_RELEASE_TAG:-}" ]]; then
-            echo "::error::No previous version is available for upgrade testing. Import the original upload-signed published APK and set PUBLISHED_BASELINE_RELEASE_TAG."
-            exit 1
-          fi
-          if [[ -n "${PUBLISHED_BASELINE_RELEASE_TAG:-}" ]]; then
-            mkdir -p "$RUNNER_TEMP/published-baseline"
-            gh release download "$PUBLISHED_BASELINE_RELEASE_TAG" \
-              --pattern 'Bastehyab-Published-Baseline.apk' --dir "$RUNNER_TEMP/published-baseline"
-            BASELINE_APK="$RUNNER_TEMP/published-baseline/Bastehyab-Published-Baseline.apk"
-            BUILD_TOOLS="${ANDROID_HOME:-${ANDROID_SDK_ROOT}}/build-tools/36.0.0"
-            "$BUILD_TOOLS/aapt" dump badging "$BASELINE_APK" > "$RUNNER_TEMP/published-baseline-badging.txt"
-            grep -Fq "name='app.bastehyab'" "$RUNNER_TEMP/published-baseline-badging.txt"
-            BASELINE_APK_CODE="$(sed -n "s/.*versionCode='\([0-9][0-9]*\)'.*/\1/p" "$RUNNER_TEMP/published-baseline-badging.txt" | head -n 1)"
-            if [[ "$BASELINE_APK_CODE" != "$PUBLISHED_VERSION_CODE_BASELINE" ]]; then
-              echo "::error::Imported published APK versionCode ($BASELINE_APK_CODE) must match PUBLISHED_VERSION_CODE_BASELINE ($PUBLISHED_VERSION_CODE_BASELINE)."
-              exit 1
-            fi
-            "$BUILD_TOOLS/apksigner" verify --print-certs "$BASELINE_APK" > "$RUNNER_TEMP/published-baseline-signer.txt"
-            echo "published_baseline_apk=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "published_baseline_apk=false" >> "$GITHUB_OUTPUT"
-          fi
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "::error::Release $TAG already exists; releases are immutable and cannot be overwritten."
-            exit 1
-          fi
-          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]] && git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
-            echo "::error::Tag $TAG already exists; refusing to move or reuse it."
-            exit 1
-          fi
-          echo "version_name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
-          echo "version_code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "previous_tag=$PREVIOUS_GITHUB_TAG" >> "$GITHUB_OUTPUT"
-          echo "published_baseline=$PUBLISHED_VERSION_CODE_BASELINE" >> "$GITHUB_OUTPUT"
-
-      # Release secrets are scoped to this job only and are never uploaded as artifacts.
-      - name: Validate and mask signing secrets
-        env:
-          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          for name in KEYSTORE_BASE64 KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
-            value="${!name:-}"
-            if [[ -z "$value" ]]; then
-              echo "::error::Required signing secret $name is missing."
-              exit 1
-            fi
-            echo "::add-mask::$value"
-          done
-
-      - name: Prepare temporary signing properties
-        env:
-          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-          KEYSTORE_PATH: ${{ runner.temp }}/bastehyab-release.jks
-        shell: bash
-        run: |
-          set -euo pipefail
-          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH"
-          test -s "$KEYSTORE_PATH"
-          chmod 600 "$KEYSTORE_PATH"
-          python3 - <<'PY'
-          import os
-          from pathlib import Path
-          def esc(value):
-              out=[]
-              for i,ch in enumerate(value):
-                  n=ord(ch)
-                  if ch == "\\": out.append("\\\\")
-                  elif ch == "\t": out.append("\\t")
-                  elif ch == "\n": out.append("\\n")
-                  elif ch == "\r": out.append("\\r")
-                  elif ch == "\f": out.append("\\f")
-                  elif ch in "=:# !" and (ch != " " or i == 0): out.append("\\"+ch)
-                  elif n < 0x20 or n > 0x7e:
-                      b=ch.encode("utf-16-be")
-                      if len(b)==2: out.append(f"\\u{int.from_bytes(b,'big'):04x}")
-                      else: out.append(f"\\u{int.from_bytes(b[:2],'big'):04x}\\u{int.from_bytes(b[2:],'big'):04x}")
-                  else: out.append(ch)
-              return "".join(out)
-          values={
-              "storeFile": os.environ["KEYSTORE_PATH"],
-              "storePassword": os.environ["KEYSTORE_PASSWORD"],
-              "keyAlias": os.environ["KEY_ALIAS"],
-              "keyPassword": os.environ["KEY_PASSWORD"],
-          }
-          Path("keystore.properties").write_bytes(("\n".join(f"{k}={esc(v)}" for k,v in values.items())+"\n").encode("ascii"))
-          PY
-          chmod 600 keystore.properties
-
-      - name: Build signed Release APK
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -s keystore.properties
-          ./gradlew --no-daemon --stacktrace clean :app:assembleRelease
-          APK="$(find app/build/outputs/apk/release -type f -name '*.apk' -print -quit)"
-          test -n "$APK"
-          mkdir -p dist
-          cp "$APK" dist/Bastehyab-Release.apk
-
-      - name: Validate APK identity, signature, alignment and version
-        id: apk-verify
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          APK="$GITHUB_WORKSPACE/dist/Bastehyab-Release.apk"
-          BUILD_TOOLS="${ANDROID_HOME:-${ANDROID_SDK_ROOT}}/build-tools/36.0.0"
-          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK" > "$RUNNER_TEMP/current-signer.txt"
-          "$BUILD_TOOLS/zipalign" -c -v 4 "$APK"
-          "$BUILD_TOOLS/aapt" dump badging "$APK" > "$RUNNER_TEMP/current-badging.txt"
-          grep -Fq "name='app.bastehyab'" "$RUNNER_TEMP/current-badging.txt"
-          grep -Fq "versionName='${{ steps.release-meta.outputs.version_name }}'" "$RUNNER_TEMP/current-badging.txt"
-          grep -Fq "versionCode='${{ steps.release-meta.outputs.version_code }}'" "$RUNNER_TEMP/current-badging.txt"
-          CERT="$(sed -n 's/.*Signer #1 certificate SHA-256 digest: //p' "$RUNNER_TEMP/current-signer.txt" | head -n 1 | tr '[:upper:]' '[:lower:]')"
-          test -n "$CERT"
-          if [[ "${{ steps.release-meta.outputs.published_baseline_apk }}" == "true" ]]; then
-            PUBLISHED_CERT="$(sed -n 's/.*Signer #1 certificate SHA-256 digest: //p' "$RUNNER_TEMP/published-baseline-signer.txt" | head -n 1 | tr '[:upper:]' '[:lower:]')"
-            if [[ "$PUBLISHED_CERT" != "$CERT" ]]; then
-              echo "::error::Release signing certificate does not match imported Google published baseline APK."
-              exit 1
-            fi
-          fi
-          printf '%s  %s\n' "$CERT" "Bastehyab release signing certificate SHA-256" > dist/Signing-Certificate-SHA256.txt
-          sha256sum dist/Bastehyab-Release.apk > dist/SHA256.txt
-          echo "certificate=$CERT" >> "$GITHUB_OUTPUT"
-
-      - name: Validate upgrade against previous GitHub release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          PREVIOUS_TAG="${{ steps.release-meta.outputs.previous_tag }}"
-          mkdir -p "$RUNNER_TEMP/previous-release"
-          if [[ -n "$PREVIOUS_TAG" ]]; then
-            gh release download "$PREVIOUS_TAG" --pattern 'Bastehyab-Release.apk' --dir "$RUNNER_TEMP/previous-release"
-            PREVIOUS_APK="$RUNNER_TEMP/previous-release/Bastehyab-Release.apk"
-          elif [[ "${{ steps.release-meta.outputs.published_baseline_apk }}" == "true" ]]; then
-            PREVIOUS_APK="$RUNNER_TEMP/published-baseline/Bastehyab-Published-Baseline.apk"
-            cp "$PREVIOUS_APK" "$RUNNER_TEMP/previous-release/Bastehyab-Release.apk"
-            PREVIOUS_APK="$RUNNER_TEMP/previous-release/Bastehyab-Release.apk"
-          else
-            echo "::warning::No prior GitHub APK or imported published baseline APK exists; upgrade install test is skipped."
-            echo "Upgrade install test skipped: import the previous signed published APK as documented." >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          BUILD_TOOLS="${ANDROID_HOME:-${ANDROID_SDK_ROOT}}/build-tools/36.0.0"
-          PREVIOUS_CODE="$("$BUILD_TOOLS/aapt" dump badging "$PREVIOUS_APK" | sed -n "s/.*versionCode='\([0-9][0-9]*\)'.*/\1/p" | head -n 1)"
-          CURRENT_CODE="${{ steps.release-meta.outputs.version_code }}"
-          [[ -n "$PREVIOUS_CODE" && "$CURRENT_CODE" -gt "$PREVIOUS_CODE" ]]
-          "$BUILD_TOOLS/apksigner" verify --print-certs "$PREVIOUS_APK" > "$RUNNER_TEMP/previous-signer.txt"
-          PREVIOUS_CERT="$(sed -n 's/.*Signer #1 certificate SHA-256 digest: //p' "$RUNNER_TEMP/previous-signer.txt" | head -n 1 | tr '[:upper:]' '[:lower:]')"
-          CURRENT_CERT="${{ steps.apk-verify.outputs.certificate }}"
-          if [[ "$PREVIOUS_CERT" != "$CURRENT_CERT" ]]; then
-            echo "::error::Signing certificate differs from previous release; upgrade would fail."
-            exit 1
-          fi
-          echo "Previous release $PREVIOUS_TAG code $PREVIOUS_CODE and signing certificate match." >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Install and upgrade-test on Android 16 emulator
-        timeout-minutes: 20
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          PREVIOUS_TAG="${{ steps.release-meta.outputs.previous_tag }}"
-          mkdir -p "$RUNNER_TEMP/previous-release"
-          if [[ -n "$PREVIOUS_TAG" ]]; then
-            gh release download "$PREVIOUS_TAG" --pattern 'Bastehyab-Release.apk' --dir "$RUNNER_TEMP/previous-release" --clobber
-          else
-            cp "$RUNNER_TEMP/published-baseline/Bastehyab-Published-Baseline.apk" \
-              "$RUNNER_TEMP/previous-release/Bastehyab-Release.apk"
-          fi
-
-          # Confirm KVM access is usable before starting the emulator.
-          if [[ ! -e /dev/kvm || ! -r /dev/kvm || ! -w /dev/kvm ]]; then
-            echo "::error::/dev/kvm is not accessible; Android x86_64 emulation requires KVM."
-            ls -l /dev/kvm || true
-            exit 1
-          fi
-
-          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
-          export PATH="$SDK_ROOT/emulator:$SDK_ROOT/platform-tools:$SDK_ROOT/cmdline-tools/latest/bin:$PATH"
-
-          export ANDROID_USER_HOME="$RUNNER_TEMP/android-release-user-home"
-          export ANDROID_AVD_HOME="$ANDROID_USER_HOME/avd"
-          mkdir -p "$ANDROID_AVD_HOME"
-
-          AVD_NAME="bastehyab-release-api36"
-          AVD_PATH="$ANDROID_AVD_HOME/$AVD_NAME.avd"
-          AVD_INI="$ANDROID_AVD_HOME/$AVD_NAME.ini"
-          rm -rf "$AVD_PATH" "$AVD_INI"
-
-          printf 'no\n' | avdmanager create avd \
-            --force \
-            --name "$AVD_NAME" \
-            --package "system-images;android-36;google_apis;x86_64" \
-            --device "pixel_2" \
-            --path "$AVD_PATH"
-
-          if [[ ! -f "$AVD_INI" || ! -f "$AVD_PATH/config.ini" ]]; then
-            echo "::error::AVD creation did not produce the expected configuration files."
-            find "$ANDROID_AVD_HOME" -maxdepth 3 -type f -print || true
-            avdmanager list avd || true
-            exit 1
-          fi
-
-          emulator -avd "$AVD_NAME" -port 5554 -no-window -no-audio -no-boot-anim \
-            -no-snapshot -wipe-data -gpu swiftshader_indirect -memory 3072 -cores 4 \
-            > "$RUNNER_TEMP/bastehyab-release-emulator.log" 2>&1 &
-          EMULATOR_PID=$!
-          cleanup_emulator() { adb emu kill >/dev/null 2>&1 || true; kill "$EMULATOR_PID" >/dev/null 2>&1 || true; }
-          trap cleanup_emulator EXIT
-          if ! timeout 180s adb -s emulator-5554 wait-for-device; then
-            echo "::error::Release emulator did not become available through ADB."
-            tail -n 200 "$RUNNER_TEMP/bastehyab-release-emulator.log" || true
-            adb devices -l || true
-            exit 1
-          fi
-          booted=0
-          for attempt in $(seq 1 180); do
-            if [[ "$(adb -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" == "1" ]]; then booted=1; break; fi
-            sleep 2
-          done
-          if [[ "$booted" -ne 1 ]]; then
-            echo "::error::Release emulator did not finish booting."
-            tail -n 200 "$RUNNER_TEMP/bastehyab-release-emulator.log" || true
-            adb devices -l || true
-            exit 1
-          fi
-          adb -s emulator-5554 install "$RUNNER_TEMP/previous-release/Bastehyab-Release.apk"
-          adb -s emulator-5554 install -r "$GITHUB_WORKSPACE/dist/Bastehyab-Release.apk"
-          adb -s emulator-5554 shell monkey -p app.bastehyab 1 >/dev/null
-          adb -s emulator-5554 shell dumpsys package app.bastehyab | grep -q "versionCode=${{ steps.release-meta.outputs.version_code }}"
-          echo "Install + in-place upgrade passed on API 36." >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Generate notes from canonical CHANGELOG section
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 tools/release/generate-release-notes.py \
-            "${{ steps.release-meta.outputs.version_name }}" dist/RELEASE-NOTES.md
-
-      - name: Publish immutable versioned GitHub Release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          TAG="${{ steps.release-meta.outputs.tag }}"
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "::error::Release $TAG already exists; refusing to overwrite assets or notes."
-            exit 1
-          fi
-          if [[ "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_REF" == refs/tags/* ]]; then
-            gh release create "$TAG" \
-              dist/Bastehyab-Release.apk dist/SHA256.txt dist/Signing-Certificate-SHA256.txt dist/RELEASE-NOTES.md \
-              --verify-tag --title "Bastehyab ${{ steps.release-meta.outputs.version_name }}" \
-              --notes-file dist/RELEASE-NOTES.md --latest
-          else
-            gh release create "$TAG" \
-              dist/Bastehyab-Release.apk dist/SHA256.txt dist/Signing-Certificate-SHA256.txt dist/RELEASE-NOTES.md \
-              --target "$GITHUB_SHA" --title "Bastehyab ${{ steps.release-meta.outputs.version_name }}" \
-              --notes-file dist/RELEASE-NOTES.md --latest
-          fi
-          {
-            echo "## Published release $TAG"
-            echo "- versionName: ${{ steps.release-meta.outputs.version_name }}"
-            echo "- versionCode: ${{ steps.release-meta.outputs.version_code }}"
-            echo "- Imported published baseline: ${{ steps.release-meta.outputs.published_baseline }}"
-            echo "- APK SHA-256: $(cut -d' ' -f1 dist/SHA256.txt)"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Remove temporary signing material
-        if: always()
-        shell: bash
-        run: |
-          set +e
-          rm -f "$GITHUB_WORKSPACE/keystore.properties"
-          rm -f "$RUNNER_TEMP/bastehyab-release.jks"
